@@ -85,3 +85,8 @@ Thumbs.db
 tmp/
 temp/
 *.tmp
+
+# Local runtime data (uploads, results, SQLite) and downloaded pose models
+backend/data/
+backend/models/*.task
+*.db
