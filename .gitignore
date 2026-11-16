@@ -90,3 +90,6 @@ temp/
 backend/data/
 backend/models/*.task
 *.db
+
+# ...but keep the small generated stick-figure sample clip
+!examples/synthetic/*.mp4

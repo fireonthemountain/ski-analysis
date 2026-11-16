@@ -18,8 +18,13 @@ FONT = cv2.FONT_HERSHEY_SIMPLEX
 
 
 def _text(img, text, org, scale, color=(255, 255, 255), thick=1):
-    cv2.putText(img, text, org, FONT, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
-    cv2.putText(img, text, org, FONT, scale, color, thick, cv2.LINE_AA)
+    """Text on a dark translucent plate (readable on snow; no outline tricks, which OpenCV 5 renders unevenly)."""
+    (tw, th), base = cv2.getTextSize(text, FONT, scale, thick)
+    x, y = org
+    x0, y0, x1, y1 = max(0, x - 4), max(0, y - th - 5), min(img.shape[1], x + tw + 4), min(img.shape[0], y + base + 3)
+    if x1 > x0 and y1 > y0:
+        img[y0:y1, x0:x1] = (img[y0:y1, x0:x1] * 0.35).astype(np.uint8)
+    cv2.putText(img, text, (x, y), FONT, scale, color, thick, cv2.LINE_AA)
 
 
 def draw_skeleton(img: np.ndarray, f: PoseFrame, view: str = "frontal") -> np.ndarray:
@@ -67,7 +72,9 @@ def annotate(img: np.ndarray, f: PoseFrame, ms: MetricSeries, i: int, captions: 
         add("stance_width_2d", "stance", "{:.2f}x")
     if ms.view != "frontal":
         add("fore_aft", "fore-aft")
-    add("knee_mean", "knee", "{:.0f}"); add("separation", "separation")
+    if ms.values["angles_3d"][i] > 0.5 or ms.view == "side":      # a 2D knee angle from the front is foreshortened
+        add("knee_mean", "knee", "{:.0f}")
+    add("separation", "separation")
     head = f"t={f.t:.2f}s  pose conf {ms.pose_conf[i]:.2f}" if ms.is_video else f"{f.source}  pose conf {ms.pose_conf[i]:.2f}"
     y = int(26 * s / 0.6)
     _text(out, head, (10, y), s, (255, 255, 255), 1)

@@ -56,7 +56,8 @@ def analyze_sequence(seq: PoseSequence, assessment: Assessment) -> tuple[PoseSeq
 
 def run_validation(assessment: Assessment, media_paths: list[str], out_dir: str,
                    estimator: Optional[PoseEstimator] = None, progress: Optional[Progress] = None,
-                   target_fps: float = 15.0, max_seconds: float = 90.0, make_video: bool = True) -> dict:
+                   target_fps: float = 15.0, max_seconds: float = 90.0, make_video: bool = True,
+                   display_names: Optional[list[str]] = None) -> dict:
     """Run the whole pipeline. ``media_paths`` is one video OR one-or-more still images.
     Writes result.json + frames/ (+ annotated.mp4) into ``out_dir`` and returns the result dict."""
     t0 = time.time()
@@ -77,7 +78,8 @@ def run_validation(assessment: Assessment, media_paths: list[str], out_dir: str,
     est.reset()
     frames: list[PoseFrame] = []
     raw_paths: list[str] = []
-    media_info: dict = {"kind": "video" if is_video else "images", "files": [os.path.basename(p) for p in media_paths]}
+    names = display_names if display_names and len(display_names) == len(media_paths) else [os.path.basename(p) for p in media_paths]
+    media_info: dict = {"kind": "video" if is_video else "images", "files": names}
 
     try:
         if is_video:
@@ -99,7 +101,7 @@ def run_validation(assessment: Assessment, media_paths: list[str], out_dir: str,
             for k, path in enumerate(media_paths):
                 img = ingest.load_image(path)
                 est.reset()
-                frames.append(est.estimate(img, k, 0.0, source=os.path.basename(path), track=False))
+                frames.append(est.estimate(img, k, 0.0, source=names[k], track=False))
                 p = os.path.join(raw_dir, f"{k:05d}.jpg")
                 cv2.imwrite(p, img, [cv2.IMWRITE_JPEG_QUALITY, 92])
                 raw_paths.append(p)
@@ -173,7 +175,10 @@ def run_validation(assessment: Assessment, media_paths: list[str], out_dir: str,
             warnings.append(f"You set the camera view to '{ms.view}', but the poses look like a '{auto}' view.")
 
     series = {"t": _clean(ms.t), "pose_conf": _clean(ms.pose_conf), "inclination_smooth": _clean(ctx.incl_smooth)}
+    flat_2d = not seq.has_world and ms.view != "side"      # 2D joint angles from the front are foreshortened: never chart them
     for name in CHART_SERIES:
+        if flat_2d and name in ("knee_left", "knee_right", "knee_mean", "hip_angle"):
+            continue
         v = np.where(ms.valid(name), ms.values[name], np.nan)
         if np.any(np.isfinite(v)):
             series[name] = _clean(v)

@@ -51,6 +51,7 @@ def _process(run_id: str, media_paths: list[str]) -> None:
             Assessment(**run.assessment), media_paths, run.result_dir,
             progress=lambda f, m: _set_progress(run_id, f, m),
             target_fps=config.ANALYSIS_FPS, max_seconds=config.MAX_ANALYSIS_SECONDS,
+            display_names=[os.path.basename(n or '') or f'file {i + 1}' for i, n in enumerate(run.media_files or [])],
         )
         run.summary = result["summary"]
         run.status = ProcessingStatus.COMPLETED
@@ -62,7 +63,8 @@ def _process(run_id: str, media_paths: list[str]) -> None:
         run.finished_at = datetime.utcnow()
         db.commit()
         db.close()
-        shutil.rmtree(os.path.join(os.path.dirname(media_paths[0])), ignore_errors=True) if media_paths else None
+        if media_paths:                      # the uploaded originals are not kept; only annotated outputs are
+            shutil.rmtree(os.path.dirname(media_paths[0]), ignore_errors=True)
         with _lock:
             _progress.pop(run_id, None)
 

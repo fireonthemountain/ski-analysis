@@ -31,12 +31,11 @@ from analysis import pose_detector, technique_analyzer
 async def lifespan(app: FastAPI):
     create_tables()
     interrupted = fail_interrupted_runs()
-    ip = config.lan_ip()
-    print("Ski Analysis API ready")
-    print(f"  API (this machine): http://localhost:{config.PORT}/api/docs")
-    print(f"  API (LAN):          http://{ip}:{config.PORT}/api/docs")
-    print(f"  App (LAN, dev UI):  http://{ip}:{config.FRONTEND_PORT}")
-    print(f"  Data dir:           {config.DATA_DIR}")
+    print("Ski Analysis API ready", flush=True)
+    print(f"  This machine: http://localhost:{config.PORT}/api/docs")
+    for ip in config.lan_ips():
+        print(f"  LAN:          http://{ip}:{config.FRONTEND_PORT}  (dev UI)   http://{ip}:{config.PORT}/api/docs  (API)")
+    print(f"  Data dir:     {config.DATA_DIR}", flush=True)
     if interrupted:
         print(f"  Marked {interrupted} interrupted validation run(s) as failed")
     yield
