@@ -211,12 +211,13 @@ def test_fore_aft_disagree_when_clearly_forward():
     assert res["fore_aft"]["verdict"] == "disagree" and res["fore_aft"]["measured"]["category"] == "forward"
 
 
-def test_2d_only_estimator_cannot_rule_on_rotation_and_flags_knee():
+def test_2d_only_estimator_cannot_rule_on_rotation_or_front_view_knee_angle():
     seq = run_sequence(spec_good(), with_world=False)
     res, _ = assess(seq, {"separation": "moderate", "counter": "countered", "stance_height": "athletic", "edge_angle": "moderate"})
     assert res["separation"]["verdict"] == "inconclusive" and "3D" in res["separation"]["reason"]
     assert res["counter"]["verdict"] == "inconclusive"
-    assert any("2D" in n for n in res["stance_height"]["notes"])
+    assert res["stance_height"]["verdict"] == "inconclusive" and "foreshortens" in res["stance_height"]["reason"]
+    assert res["stance_height"]["measured"] is None         # a biased 2D angle must not be reported
     assert res["edge_angle"]["verdict"] == "agree"          # frontal 2D metric is unaffected
 
 
@@ -281,8 +282,8 @@ def test_stills_measure_static_items_and_refuse_dynamic_ones():
 
 
 def test_single_still_works_with_reduced_confidence():
-    one = stills([SkierParams(heading_deg=0, inclination_deg=50)])
-    three = stills([SkierParams(heading_deg=0, inclination_deg=50)] * 4)
+    one = stills([SkierParams(heading_deg=0, inclination_deg=50, angulation_deg=20)])
+    three = stills([SkierParams(heading_deg=0, inclination_deg=50, angulation_deg=20)] * 4)
     r1 = assess(one, {"edge_angle": "high"})[0]["edge_angle"]
     r4 = assess(three, {"edge_angle": "high"})[0]["edge_angle"]
     assert r1["verdict"] == "agree" and r1["confidence"] < r4["confidence"]

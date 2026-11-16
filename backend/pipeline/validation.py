@@ -100,7 +100,9 @@ def _view_gate(ctx: Context, item: Item, m: Measurement) -> bool:
                          "at an oblique angle the angle would be biased. If the view really is close to "
                          f"{want}, set the camera view manually and re-run.")
         return False
-    if view == "unknown":
+    if view == "unknown" and not np.any(ctx.ms.pose_conf > 0):
+        m.unavailable = "No skier was detected in the media."
+    elif view == "unknown":
         m.unavailable = "Could not determine the camera view (shoulders and hips not confidently detected)."
     else:
         m.unavailable = f"Needs a {want} view; this media is a {names.get(view, view)} view."
@@ -213,6 +215,7 @@ def eval_hip(ctx: Context, item: Item) -> Measurement:
 
 
 def _note_2d(ctx: Context, m: Measurement, name: str) -> None:
+    """Joint angles without 3D are only trustworthy when the joint bends in the image plane (side view)."""
     if m.value is None:
         return
     idx = np.flatnonzero(ctx.ms.valid(name))
@@ -220,8 +223,10 @@ def _note_2d(ctx: Context, m: Measurement, name: str) -> None:
         if ctx.ms.view == "side":
             m.notes.append("Measured in the 2D image plane (side view, so foreshortening is small).")
         else:
-            m.extra_factor *= 0.6
-            m.notes.append("No 3D landmarks: the angle is measured in the 2D image, which a front/back view foreshortens (legs look straighter than they are).")
+            m.value = None
+            m.evidence = []
+            m.unavailable = ("No 3D landmarks from this pose estimator, and the view is not side-on: a 2D image "
+                             "foreshortens the joint (legs look straighter than they are), so no value is reported.")
 
 
 def eval_vertical(ctx: Context, item: Item) -> Measurement:
