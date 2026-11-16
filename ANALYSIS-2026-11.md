@@ -146,6 +146,17 @@ No footage handy: `POSE_ESTIMATOR=marker scripts/run_dev.sh` and upload `example
 | b51e7d9 | Validation API, `X-User-Id`, zero-service local run, end-to-end tests |
 | e55034e | Compose secrets to `.env`, missing Dockerfiles |
 | fc66b4f | Assessment form + results UI, CLI, `run_dev.sh`, sample media |
-| (next) | Docs: this file, `docs/PIPELINE.md`, README quick start, MAC_SETUP note |
+| ddee44b | Docs: this file, `docs/PIPELINE.md`, README quick start, MAC_SETUP note |
 
 Nothing was pushed, merged or deployed.
+
+## 8. Final report (short form)
+
+- **Works:** assessment form → upload (one video or screenshots) → pose → smoothing → turns → 12 metrics → per-item
+  agree / disagree / inconclusive with value ± uncertainty, confidence and annotated evidence frames → results page with
+  agreement table, annotated video and charts. Runs with `scripts/run_dev.sh`, no Docker, reachable on the LAN at port 5177.
+- **Tests:** 116 passed, 0 failed (73 metric unit tests, 35 engine tests, 8 HTTP end-to-end tests); frontend build passes.
+- **Not proven:** accuracy on real ski footage. Everything above was verified on a synthetic stick figure; MediaPipe
+  itself has only been shown to load, run, and return "no skier" on that figure. Thresholds are uncalibrated defaults.
+- **Not done:** `ski-analysis-1` (open-source checklist); refresh of the older docs; full `docker compose up` run.
+- **Next step for csather:** run one front-on clip of his own through it and look at the overlay (`ski-analysis-4`).
