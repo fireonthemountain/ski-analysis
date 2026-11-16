@@ -474,3 +474,22 @@ If you run into issues:
 ---
 
 **Ready to get started? Follow the Quick Start section above!** 🎿
+
+---
+
+## Update (November 2026): simplest way to run, and where secrets live
+
+**No Docker needed.** `scripts/run_dev.sh` creates `backend/venv`, uses SQLite and local files under
+`backend/data/`, starts the API on port 8003 and the UI on 5177 (both bound to 0.0.0.0) and prints
+the LAN URL. The steps above that start PostgreSQL/MinIO are only needed for the Docker stack.
+
+**Docker stack secrets** are no longer written in `docker-compose.yml`. They are read from `.env`:
+
+```bash
+cp .env.example .env        # then edit the four change-me values
+docker compose config -q    # checks that every required variable is set
+docker compose up
+```
+
+`POSTGRES_PASSWORD`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY` and `SECRET_KEY` are required: compose
+stops with a message naming the missing one. `.env` is git-ignored; `.env.example` is the template.

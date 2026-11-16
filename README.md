@@ -1,6 +1,6 @@
 # 🎿 Ski Technique Analysis
 
-AI-powered skiing technique analysis using computer vision and biomechanics. Upload a photo of yourself skiing and get instant feedback on your form, aligned with PSIA (Professional Ski Instructors of America) standards.
+Check your own read of a ski run against measurements. Rate what you saw using PSIA-style fundamentals, upload the video or screenshots, and pose estimation tells you where the evidence agrees, disagrees, or cannot say.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
@@ -12,104 +12,82 @@ AI-powered skiing technique analysis using computer vision and biomechanics. Upl
 
 ---
 
-## 📸 Demo
+## What it does now (November 2026): validate your own assessment
 
-*Upload a skiing photo → Get instant analysis with skeleton overlay and PSIA-aligned scoring*
+You rate a run the way an instructor would (stance width, fore-aft balance, edge angle, angulation,
+upper/lower separation, rotation/counter, pole-plant timing, turn shape, ...), upload **one video or a
+few screenshots**, and for each rating the app answers:
 
-**What you get:**
-- 🎯 Overall technique score (0-100)
-- 📊 Detailed metrics (forward lean, knee flexion, balance, alignment)
-- 💡 Personalized coaching recommendations
-- 🦴 Skeleton overlay visualization
-- ⚖️ PSIA standards alignment
+- **Agrees / Disagrees / Inconclusive**
+- the measured value with its uncertainty, and the band thresholds
+- a confidence score
+- the annotated frames (skeleton overlay) that show it
 
----
+A low-confidence pose, the wrong camera angle, or a value too close to a threshold gives
+*inconclusive* with the reason, never a guessed verdict. Design, metrics and thresholds:
+[docs/PIPELINE.md](docs/PIPELINE.md). Current state and test results: [ANALYSIS-2026-11.md](ANALYSIS-2026-11.md).
 
-## 🎯 Why This Project?
-
-**Problem:** Getting quality feedback on skiing technique is expensive and time-consuming. Ski lessons cost $100-300/hour, and it's hard to objectively measure progress.
-
-**Solution:** Use computer vision and biomechanical analysis to provide instant, objective feedback on skiing technique from just a photo. Perfect for:
-- 🎿 Recreational skiers wanting to improve
-- 🏫 Ski instructors tracking student progress
-- 📈 Athletes analyzing their form
-- 🎓 Students learning biomechanics
-
-**Current Status:** ✅ **MVP Complete** - Photo analysis working with 8+ metrics and PSIA-aligned scoring
+> Accuracy on real ski footage has not been validated yet. The automated tests use a synthetic
+> stick figure with known angles. Check the skeleton overlay on your footage before trusting a number.
 
 ---
 
-## ✨ Features
+## 🚀 Quick Start (no Docker, no database server)
 
-### Core Functionality (v1.0)
-- ✅ **Photo Upload & Analysis** - Drag-and-drop interface, supports JPG/PNG
-- ✅ **Pose Detection** - 33-point skeleton tracking using MediaPipe
-- ✅ **PSIA-Aligned Scoring** - Professional ski instructor standards
-- ✅ **8+ Biomechanical Metrics:**
-  - Forward lean angle (15-25° optimal)
-  - Knee flexion (140-160° optimal)
-  - Hip-ankle alignment
-  - Shoulder level
-  - Balance/center of mass
-  - Stance width
-  - Upper/lower body scores
-- ✅ **Visual Overlays** - Skeleton tracking with toggle view
-- ✅ **Coaching Recommendations** - AI-generated tips based on analysis
-- ✅ **Batch Processing** - Analyze multiple images with CSV export
-
-### Planned Features
-- 🔜 Video analysis (frame-by-frame)
-- 🔜 Progress tracking over time
-- 🔜 User accounts and history
-- 🔜 Side-by-side comparisons
-- 🔜 Mobile app
-
----
-
-## 🚀 Quick Start
-
-### Option 1: Docker (Recommended)
+Needs Python 3.11–3.13, Node 18+, and `ffmpeg` (`brew install python@3.11 node ffmpeg`).
 
 ```bash
-# Clone the repository
-git clone https://github.com/fireonthemountain/ski-analysis.git
-cd ski-analysis
-
-# Start all services
-docker-compose up
-
-# Open http://localhost:5173 and upload a skiing photo!
+cd "ski-analysis"
+scripts/run_dev.sh
 ```
 
-### Option 2: Manual Setup
+It creates `backend/venv`, installs dependencies, downloads the pose model on first use (~30 MB, from
+Google's MediaPipe model host), then prints the URLs, e.g.
 
-**Prerequisites:**
-- Python 3.11+
-- Node.js 18+
-- PostgreSQL (or use Docker for just the database)
+```
+  Open on this Mac:   http://localhost:5177
+  Open on the LAN:    http://192.168.6.89:5177
+```
 
-**Backend:**
+API: port **8003** (`/api/docs`). UI: port **5177**. Both listen on all interfaces.
+Data (SQLite, results, annotated frames) lives in `backend/data/`.
+
+### Your first validation
+
+1. Film or pick a clip: **skier coming straight at the camera or going straight away** for edging,
+   angulation, separation and turns; **side-on** for fore-aft. One skier, whole body in frame, as large
+   as possible. Up to 500 MB; the first 90 s are analysed.
+2. Open the UI, drop the video (or 1–40 screenshots: jpg/png/webp/heic).
+3. Rate only the items you actually observed. Each rating button shows its numeric band.
+4. Leave *Camera view* on Auto-detect unless it guesses wrong.
+5. Click **Validate**. The results page shows the agreement table; click a row for its evidence frames,
+   and click any chart to jump the annotated video to that moment.
+
+Command line instead of the UI:
+
 ```bash
 cd backend
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
-python main.py
+./venv/bin/python -m pipeline.cli --list-items
+./venv/bin/python -m pipeline.cli --assessment ../examples/assessment.example.json ~/Movies/my_run.mov --out ~/Desktop/my_run_validation
 ```
 
-**Frontend:**
+Try it without footage (rendered stick figure; MediaPipe does not treat it as a person, so use the
+marker estimator): `backend/venv/bin/python scripts/make_sample_media.py`, then
+`POSE_ESTIMATOR=marker scripts/run_dev.sh` and upload `examples/synthetic/synthetic_run_front.mp4`.
+
+### Tests
+
 ```bash
-cd frontend
-npm install
-npm run dev
+cd backend && ./venv/bin/python -m pytest tests -q        # 116 tests
+cd frontend && npm run build                              # type-check + build
 ```
 
-**Database (Docker):**
+### Docker (optional: PostgreSQL + MinIO stack)
+
 ```bash
-docker-compose up -d postgres minio
+cp .env.example .env      # set the four change-me secrets
+docker compose up
 ```
-
-**Access:** Open http://localhost:5173
 
 ---
 

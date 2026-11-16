@@ -47,7 +47,7 @@ export function ResultsView({ id, onBack }: { id: string; onBack: () => void }) 
         <h2>Analysing “{run.run_label}”</h2>
         <div className="progress"><div style={{ width: `${(p?.fraction ?? 0) * 100}%` }} /></div>
         <div className="small muted">{p?.message ?? (run.status === 'pending' ? 'Queued behind another run' : 'Working…')}</div>
-        <div className="tiny" style={{ marginTop: 6 }}>Pose estimation runs on this Mac’s CPU: roughly 5–10 frames per second with the heavy model.</div>
+        <div className="tiny" style={{ marginTop: 6 }}>Pose estimation runs on this Mac’s CPU, one run at a time; long clips take a while. You can leave this page and come back via History.</div>
       </div>
     )
   }
