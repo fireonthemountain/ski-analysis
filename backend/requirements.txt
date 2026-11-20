@@ -39,7 +39,7 @@ minio==7.2.3    # MinIO (S3-compatible)
 pydantic==2.6.1
 pydantic-settings==2.1.0
 aiofiles==23.2.1
-pillow==10.2.0
+pillow==13.0.0
 requests==2.31.0
 
 # Testing
