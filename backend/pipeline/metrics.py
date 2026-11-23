@@ -26,6 +26,12 @@ Helpers
   view_ratio        2D shoulder (and scaled hip) width / torso length (frontal ~0.75, side ~0.1)
   facing            +1 back view (skier's right is image right), -1 front view
   wrist_drop_left/right  wrist below shoulder, in torso lengths (pole-plant proxy)
+  world_rejected    1 where the frame HAD 3D landmarks but they were implausible (see world_plausible)
+
+3D sanity checks (from the first real-footage run, ANALYSIS-2026-11.md section 9): a distant skier sometimes
+gets a "collapsed" 3D body (left and right joints almost on top of each other), and occasionally left/right
+labels swap between the upper and lower body. Both give impossible rotation values, so such frames get no 3D
+metrics (rotation, 3D stance width, joint angles) rather than a wrong one.
 """
 from __future__ import annotations
 
@@ -44,6 +50,16 @@ MIN_LEAN_FOR_TURN_SIGN = 8.0   # deg of inclination before a frame has a turn di
 HIP_TO_SHOULDER = 1.58          # typical shoulder width / hip-joint width
 VIEW_FRONTAL_MIN = 0.62         # view_ratio at or above this = front/back view (within ~35 deg)
 VIEW_SIDE_MAX = 0.27            # at or below = side view (within ~20 deg of side-on)
+
+# MediaPipe world landmarks are metric and view independent, so a real body is never narrower than this.
+# Real footage, plausible frames: shoulder-joint width 5th pct 0.27 m (median 0.33); hip-joint width 5th pct
+# 0.15 m (median 0.20). Collapsed frames on distant skiers measured 0.07-0.14 m.
+MIN_WORLD_SHOULDER_W = 0.20     # m
+MIN_WORLD_HIP_W = 0.10          # m
+# Spine plus hip rotation cannot turn the shoulders much past ~100 deg relative to the skis (a hockey stop is
+# ~90). Larger values come from left/right labels swapped between upper and lower body (seen: -142, +150);
+# the largest plausible value on real footage was 69.
+MAX_SEPARATION_DEG = 110.0
 
 # Rough segment-mass weights for a whole-body centre-of-mass proxy
 COM_WEIGHTS = {"hip": 0.45, "shoulder": 0.374, "knee": 0.112, "ankle": 0.064}
@@ -93,6 +109,13 @@ def forward_yaw(fwd_vec) -> float:
     return math.degrees(math.atan2(fwd_vec[0], fwd_vec[2]))
 
 
+def world_plausible(world: np.ndarray) -> bool:
+    """False when the 3D body is collapsed (shoulders or hips implausibly narrow from any viewpoint)."""
+    sh = float(np.linalg.norm(world[K.R_SHOULDER] - world[K.L_SHOULDER]))
+    hip = float(np.linalg.norm(world[K.R_HIP] - world[K.L_HIP]))
+    return bool(np.isfinite(sh) and np.isfinite(hip) and sh >= MIN_WORLD_SHOULDER_W and hip >= MIN_WORLD_HIP_W)
+
+
 def _pair(arr: np.ndarray, vis: np.ndarray, a: int, b: int):
     """Midpoint of a left/right pair. Uses both sides when both are visible,
     otherwise the visible one (typical in side views). Returns (point, conf)."""
@@ -118,6 +141,10 @@ def frame_metrics(f: PoseFrame) -> dict[str, tuple[float, float]]:
     if not f.detected:
         return out
     xy, vis, W = f.xy, f.vis, f.world
+    world_rejected = W is not None and not world_plausible(W)
+    if world_rejected:
+        W = None
+        out["world_rejected"] = (1.0, 1.0)
 
     sh_mid, c_sh = _pair(xy, vis, K.L_SHOULDER, K.R_SHOULDER)
     hip_mid, c_hip = _pair(xy, vis, K.L_HIP, K.R_HIP)
@@ -202,12 +229,13 @@ def frame_metrics(f: PoseFrame) -> dict[str, tuple[float, float]]:
             out["fore_aft"] = (tilt_from_vertical(c) * direction, conf)
             out["fore_aft_ref"] = (0.0, conf)           # 0 = image vertical (assumes level camera, gentle slope)
 
-    # --- joint angles (3D when available)
+    # --- joint angles (3D when available). A frame whose 3D body was rejected gets none: falling back to 2D
+    # would mix foreshortened front-view angles into an otherwise 3D series.
     P = W if W is not None else xy
     knees = []
     for name, hip, knee, ankle in (("knee_left", K.L_HIP, K.L_KNEE, K.L_ANKLE), ("knee_right", K.R_HIP, K.R_KNEE, K.R_ANKLE)):
         conf = _minvis(vis, (hip, knee, ankle))
-        if conf >= VIS_OK:
+        if conf >= VIS_OK and not world_rejected:
             a = joint_angle(P[hip], P[knee], P[ankle])
             out[name] = (a, conf)
             knees.append((a, conf))
@@ -216,7 +244,7 @@ def frame_metrics(f: PoseFrame) -> dict[str, tuple[float, float]]:
     # hip angle: torso axis (hip-mid -> shoulder-mid) vs each thigh, so that shoulders being
     # wider than hips does not read as flexion
     hips = []
-    if both_sh >= VIS_OK and both_hip >= VIS_OK or (W is None and c_torso >= VIS_OK):
+    if not world_rejected and (both_sh >= VIS_OK and both_hip >= VIS_OK or (W is None and c_torso >= VIS_OK)):
         if both_sh >= VIS_OK and both_hip >= VIS_OK:
             torso_axis = (P[K.L_SHOULDER] + P[K.R_SHOULDER]) / 2 - (P[K.L_HIP] + P[K.R_HIP]) / 2
         else:                                   # side view with the far side hidden: 2D midpoints
@@ -234,7 +262,9 @@ def frame_metrics(f: PoseFrame) -> dict[str, tuple[float, float]]:
         if both_sh >= VIS_OK and both_hip >= VIS_OK:
             psi_sh = axis_yaw(W[K.R_SHOULDER] - W[K.L_SHOULDER])
             psi_hip = axis_yaw(W[K.R_HIP] - W[K.L_HIP])
-            out["separation_pelvis"] = (wrap_deg(psi_sh - psi_hip), min(both_sh, both_hip))
+            sep_pelvis = wrap_deg(psi_sh - psi_hip)
+            if abs(sep_pelvis) <= MAX_SEPARATION_DEG:
+                out["separation_pelvis"] = (sep_pelvis, min(both_sh, both_hip))
             feet = []
             for heel, toe in ((K.L_HEEL, K.L_TOE), (K.R_HEEL, K.R_TOE)):
                 if min(vis[heel], vis[toe]) >= VIS_OK:
@@ -242,12 +272,13 @@ def frame_metrics(f: PoseFrame) -> dict[str, tuple[float, float]]:
             if len(feet) == 2:
                 fv = feet[0] / np.linalg.norm(feet[0]) + feet[1] / np.linalg.norm(feet[1])
                 sep = wrap_deg(psi_sh - forward_yaw(fv))
-                out["separation"] = (sep, min(both_sh, _minvis(vis, K.FEET)))
-                out["separation_ref"] = (1.0, 1.0)      # 1 = vs feet/skis
-            else:
+                if abs(sep) <= MAX_SEPARATION_DEG:     # beyond: labels swapped between upper and lower body
+                    out["separation"] = (sep, min(both_sh, _minvis(vis, K.FEET)))
+                    out["separation_ref"] = (1.0, 1.0)      # 1 = vs feet/skis
+            elif "separation_pelvis" in out:
                 out["separation"] = out["separation_pelvis"]
                 out["separation_ref"] = (0.0, 1.0)      # 0 = vs pelvis only
-            if "lean_skier" in out and abs(out["lean_skier"][0]) >= MIN_LEAN_FOR_TURN_SIGN:
+            if "separation" in out and "lean_skier" in out and abs(out["lean_skier"][0]) >= MIN_LEAN_FOR_TURN_SIGN:
                 turn = 1.0 if out["lean_skier"][0] > 0 else -1.0     # +1 = right turn
                 out["counter"] = (-out["separation"][0] * turn, min(out["separation"][1], out["lean_skier"][1]))
         if both_ank >= VIS_OK and both_hip >= VIS_OK:
@@ -275,7 +306,7 @@ SERIES_NAMES = [
     "view_ratio", "facing", "inclination", "lean_skier", "torso_tilt", "angulation", "edge_proxy",
     "stance_width_2d", "stance_width_3d", "fore_aft", "fore_aft_ref", "knee_left", "knee_right",
     "knee_mean", "hip_angle", "angles_3d", "separation", "separation_pelvis", "separation_ref",
-    "counter", "wrist_drop_left", "wrist_drop_right",
+    "counter", "wrist_drop_left", "wrist_drop_right", "world_rejected",
 ]
 
 

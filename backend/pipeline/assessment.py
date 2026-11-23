@@ -171,7 +171,7 @@ CATALOG: tuple[Item, ...] = (
         id="counter", label="Rotation / counter", group="Rotary",
         fundamental=f"PSIA #4 - {PSIA[4]}",
         question="Through the turn, does the upper body rotate into the turn, stay square, or face the outside (counter)?",
-        measure="Upper/lower separation signed by turn direction on frames with at least 8 deg of lean. Positive = upper body faces the outside of the turn (countered); negative = rotated into the turn.",
+        measure="Upper/lower separation signed by turn direction, in the second half of each turn (peak lean to edge change) on frames with at least 8 deg of lean. Positive = upper body faces the outside of the turn (countered); negative = rotated into the turn.",
         unit="deg",
         options=(Option("rotated", "Rotated into the turn", "shoulders lead / over-rotate"),
                  Option("square", "Square", "upper body follows the skis"),

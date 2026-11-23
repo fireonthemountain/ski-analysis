@@ -10,7 +10,7 @@ from pipeline.runner import analyze_sequence
 from pipeline.segmentation import segment_turns
 from pipeline.smoothing import fill_gaps, lowpass, smooth_sequence
 from pipeline.synthetic import RunSpec, SkierParams, make_frame, run_sequence
-from pipeline.validation import MIN_CONFIDENCE, Measurement, decide, summarize, validate
+from pipeline.validation import MIN_CONFIDENCE, Measurement, decide, eval_counter, eval_separation, summarize, validate
 
 
 def assess(seq, ratings: dict, view="auto"):
@@ -140,6 +140,55 @@ def test_separation_magnitude():
     assert r["confidence"] <= 0.6                    # monocular-3D cap
     res, _ = assess(run_sequence(spec_good(counter_deg=0)), {"separation": "strong"})
     assert res["separation"]["verdict"] == "disagree"
+
+
+def test_counter_is_judged_on_the_finish_phase():
+    # Real skiers keep the upper body facing the fall line: it faces the inside of the turn before the fall
+    # line and the outside after it, so a whole-turn median cancels to ~0 ("square"). Only the second half
+    # of each turn shows the counter.
+    res, ctx = assess(run_sequence(spec_good(stable_upper_body=True, counter_deg=40), noise_px=1.0),
+                      {"counter": "countered"})
+    whole_turn = ctx.ms.values["counter"][ctx.ms.valid("counter")]
+    assert abs(float(np.median(whole_turn))) < 5                 # what the old whole-turn median reported
+    r = res["counter"]
+    assert r["verdict"] == "agree", r["reason"]
+    assert r["measured"]["value"] > 15
+    # the mirror image (shoulders lead into the turn in its second half) reads as rotated
+    res, _ = assess(run_sequence(spec_good(stable_upper_body=True, counter_deg=-40), noise_px=1.0),
+                    {"counter": "rotated"})
+    assert res["counter"]["verdict"] == "agree", res["counter"]["reason"]
+
+
+def test_counter_on_video_needs_turns():
+    a = Assessment(items=[{"item_id": "counter", "rating": "countered"}])
+    _, _, ctx, _ = analyze_sequence(run_sequence(spec_good()), a)
+    ctx.turns = []
+    m = eval_counter(ctx, CATALOG_BY_ID["counter"])
+    assert m.value is None and "No turns" in m.unavailable
+
+
+def test_separation_evidence_is_a_typical_frame_not_the_extreme():
+    a = Assessment(items=[{"item_id": "separation", "rating": "moderate"}])
+    _, _, ctx, _ = analyze_sequence(run_sequence(spec_good(counter_deg=22)), a)
+    valid = np.flatnonzero(ctx.ms.valid("separation"))
+    outlier = int(valid[len(valid) // 2])
+    ctx.ms.values["separation"][outlier] = 95.0                 # one bad-pose frame, still under the 110 ceiling
+    m = eval_separation(ctx, CATALOG_BY_ID["separation"])
+    frame, caption = m.evidence[0]
+    assert frame != outlier and "shoulders vs feet" in caption
+    assert abs(abs(ctx.ms.values["separation"][frame]) - m.value) < 3
+
+
+def test_broken_ffmpeg_counts_as_missing(tmp_path, monkeypatch):
+    # e.g. Homebrew upgraded a library under ffmpeg: the binary is on PATH but aborts at start-up
+    from pipeline import synthetic
+    fake = tmp_path / "ffmpeg"
+    fake.write_text("#!/bin/sh\nexit 134\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert synthetic.ffmpeg_path() is None
+    out = synthetic.write_video([np.zeros((32, 32, 3), np.uint8)] * 3, str(tmp_path / "clip.mp4"), 10.0)
+    assert (tmp_path / "clip.mp4").stat().st_size > 0 and out.endswith("clip.mp4")
 
 
 def test_wrong_assessment_disagrees():

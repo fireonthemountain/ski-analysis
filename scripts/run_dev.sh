@@ -19,7 +19,11 @@ if [ ! -x venv/bin/python ]; then
   venv/bin/pip install -q --upgrade pip
   venv/bin/pip install -q -r requirements.txt
 fi
-command -v ffmpeg >/dev/null 2>&1 || echo "Note: ffmpeg not found - the annotated video will be skipped (brew install ffmpeg)."
+if ! command -v ffmpeg >/dev/null 2>&1; then
+  echo "Note: ffmpeg not found - the annotated video will be skipped (brew install ffmpeg)."
+elif ! ffmpeg -hide_banner -version >/dev/null 2>&1; then
+  echo "Note: ffmpeg is installed but will not start - the annotated video will be skipped (brew upgrade ffmpeg, or brew reinstall ffmpeg)."
+fi
 
 IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo localhost)"
 PIDS=()

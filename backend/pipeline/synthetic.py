@@ -11,6 +11,7 @@ Camera frame (same as MediaPipe world landmarks): x right, y down, z away.
 """
 from __future__ import annotations
 
+import functools
 import math
 import os
 import shutil
@@ -165,6 +166,9 @@ class RunSpec:
     knee_min_deg: float = 115.0       # most flexed (apex)
     knee_max_deg: float = 150.0       # most extended (transition)
     counter_deg: float = 15.0         # upper body turned to the outside at the apex
+    # True = upper body keeps facing the fall line while the skis swing under it (what real skiers do):
+    # shoulders face the inside of the turn before the fall line and the outside after it, peak counter_deg
+    stable_upper_body: bool = False
     stance_ratio: float = 1.0
     fore_aft_deg: float = 4.0
     heading_deg: float = 180.0
@@ -189,6 +193,9 @@ def run_params(spec: RunSpec) -> list[tuple[float, SkierParams]]:
         if incl > 0:
             incl *= spec.right_turn_scale
         knee = spec.knee_max_deg - (spec.knee_max_deg - spec.knee_min_deg) * shape
+        # shoulder yaw vs the skis, + = skier's right. Apex model: right turn (s>0) turned left = countered.
+        # Stable upper body: heading swings as -cos(phase), the shoulders stay on the fall line -> +cos(phase)
+        sh_yaw = spec.counter_deg * (math.cos(phase) if spec.stable_upper_body else -s)
         lw = rw = 0.0
         if spec.pole_plant_offset is not None:
             # edge changes happen at t = k * turn_dur; plant the new inside hand
@@ -207,8 +214,8 @@ def run_params(spec: RunSpec) -> list[tuple[float, SkierParams]]:
             knee_angle_deg=knee,
             fore_aft_deg=spec.fore_aft_deg,
             stance_ratio=spec.stance_ratio,
-            shoulder_yaw_deg=-spec.counter_deg * s,   # right turn (s>0): turned left = countered
-            pelvis_yaw_deg=-spec.counter_deg * s * 0.5,
+            shoulder_yaw_deg=sh_yaw,
+            pelvis_yaw_deg=sh_yaw * 0.5,
             feet_yaw_deg=0.0,
             left_wrist_drop=lw,
             right_wrist_drop=rw,
@@ -269,8 +276,20 @@ def render(frame: PoseFrame, background: int = 235) -> np.ndarray:
     return img
 
 
+@functools.lru_cache(maxsize=8)
+def _ffmpeg_runs(real_path: str) -> bool:
+    try:
+        return subprocess.run([real_path, "-hide_banner", "-version"], capture_output=True, timeout=15).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def ffmpeg_path() -> Optional[str]:
-    return shutil.which("ffmpeg")
+    """ffmpeg on PATH, but only if it actually starts. A broken install (e.g. a Homebrew library upgraded
+    underneath it, which aborts with a dyld error) counts as absent, so callers fall back instead of failing.
+    Cached per resolved binary, so an upgrade (new Cellar path) is re-checked."""
+    ff = shutil.which("ffmpeg")
+    return ff if ff and _ffmpeg_runs(os.path.realpath(ff)) else None
 
 
 def write_video(frames: Iterable[np.ndarray], path: str, fps: float) -> str:
@@ -284,8 +303,11 @@ def write_video(frames: Iterable[np.ndarray], path: str, fps: float) -> str:
                 cv2.imwrite(os.path.join(tmp, f"f{i:05d}.png"), img)
             cmd = [ff, "-y", "-loglevel", "error", "-framerate", f"{fps}", "-i", os.path.join(tmp, "f%05d.png"),
                    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "16", "-movflags", "+faststart", path]
-            subprocess.run(cmd, check=True)
-        return path
+            try:
+                subprocess.run(cmd, check=True, capture_output=True)
+                return path
+            except subprocess.CalledProcessError:
+                pass                                # e.g. no libx264 in this build: fall back to OpenCV
     vw = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
     for img in frames:
         vw.write(img)

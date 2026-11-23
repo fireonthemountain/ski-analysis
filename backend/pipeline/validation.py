@@ -137,7 +137,7 @@ def _nearest(idx: np.ndarray, vals: np.ndarray, target: float) -> int:
 
 
 def _turn_peak_values(ctx: Context, name: str, q: float = 95.0) -> list[tuple[Turn, float, int]]:
-    """Per turn: (turn, q-th percentile of ``name`` within the turn, frame of its max)."""
+    """Per turn: (turn, q-th percentile of ``name`` within the turn, frame closest to that percentile)."""
     out = []
     valid = ctx.ms.valid(name)
     v = ctx.ms.values[name]
@@ -145,7 +145,8 @@ def _turn_peak_values(ctx: Context, name: str, q: float = 95.0) -> list[tuple[Tu
         idx = np.arange(turn.start, turn.end + 1)
         idx = idx[valid[idx]]
         if len(idx) >= 3:
-            out.append((turn, float(np.percentile(v[idx], q)), int(idx[int(np.argmax(v[idx]))])))
+            p = float(np.percentile(v[idx], q))
+            out.append((turn, p, _nearest(idx, v[idx], p)))
     return out
 
 
@@ -164,8 +165,10 @@ def _median_item(series: str, label: str, fmt: str = "{:.0f}"):
         m.sample_factor = _sample_factor(ctx, len(idx))
         f_med = _nearest(idx, v, m.value)
         m.evidence = [(f_med, f"typical: {label} {fmt.format(ctx.ms.values[series][f_med])}")]
-        for f, tag in ((int(idx[int(np.argmin(v))]), "lowest"), (int(idx[int(np.argmax(v))]), "highest")):
-            if f != f_med and len(idx) > 1:
+        # range ends at the 5th/95th percentile: the absolute min/max is usually a bad-pose frame
+        for q, tag in ((5, "low end"), (95, "high end")):
+            f = _nearest(idx, v, float(np.percentile(v, q)))
+            if len(idx) > 1 and f not in [e[0] for e in m.evidence]:
                 m.evidence.append((f, f"{tag}: {label} {fmt.format(ctx.ms.values[series][f])}"))
         return m
     return run
@@ -243,8 +246,8 @@ def eval_vertical(ctx: Context, item: Item) -> Measurement:
     m.value = float(hi - lo)
     m.spread = 0.0
     m.sample_factor = 0.5 + 0.5 * min(1.0, span / 4.0)
-    m.evidence = [(int(idx[int(np.argmin(v))]), f"most flexed: knee {v.min():.0f} deg"),
-                  (int(idx[int(np.argmax(v))]), f"most extended: knee {v.max():.0f} deg")]
+    m.evidence = [(_nearest(idx, v, float(lo)), f"flexed end (10th pct): knee {lo:.0f} deg"),
+                  (_nearest(idx, v, float(hi)), f"extended end (90th pct): knee {hi:.0f} deg")]
     _note_2d(ctx, m, "knee_mean")
     return m
 
@@ -270,7 +273,8 @@ def eval_edge(ctx: Context, item: Item) -> Measurement:
         m.value = float(np.percentile(v[idx], 95))
         m.sample_factor = 0.5
         m.notes.append("No complete turns were segmented, so this is the 95th percentile over the whole clip.")
-        m.evidence = [(int(idx[int(np.argmax(v[idx]))]), f"largest shin tilt {v[idx].max():.0f} deg")]
+        f = _nearest(idx, v[idx], m.value)
+        m.evidence = [(f, f"near the 95th percentile: shin tilt {v[f]:.0f} deg")]
     else:
         m.value = float(np.max(v[idx]))
         m.sample_factor = _sample_factor(ctx, len(idx))
@@ -326,24 +330,50 @@ def eval_separation(ctx: Context, item: Item) -> Measurement:
     if float(np.mean(ctx.ms.values["separation_ref"][idx])) < 0.5:
         m.extra_factor *= 0.8
         m.notes.append("Feet not confidently visible: measured shoulders against the pelvis (spinal twist) instead of against the skis, which under-reads leg rotation.")
-    order = idx[np.argsort(-a)][:1]
-    m.evidence = [(int(f), f"shoulders vs feet {ctx.ms.values['separation'][f]:+.0f} deg") for f in order]
+    f = _nearest(idx, a, m.value)          # the frame that looks like the reported value, not the extreme
+    ref = "feet" if ctx.ms.values["separation_ref"][f] >= 0.5 else "pelvis"
+    m.evidence = [(f, f"shoulders vs {ref} {ctx.ms.values['separation'][f]:+.0f} deg")]
     return m
 
 
+def _finish_phase_mask(ctx: Context) -> np.ndarray:
+    """Frames from each turn's peak lean to its end: the shaping/finish phase, up to the edge change."""
+    mask = np.zeros(ctx.n, bool)
+    for t in ctx.turns:
+        mask[t.peak:t.end + 1] = True
+    return mask
+
+
 def eval_counter(ctx: Context, item: Item) -> Measurement:
+    """Counter is judged on the second half of each turn only. With the upper body facing down the fall line,
+    it faces the INSIDE of the new turn until the skis cross the fall line and the outside after it; a median
+    over the whole turn cancels the two and rates a textbook countered skier 'square' (seen on real footage:
+    initiation -15..-18 deg, finish +11..+12 deg, whole turn -1..-2 deg)."""
     m = Measurement(method=item.measure)
     if not _view_gate(ctx, item, m):
         return m
     if not np.any(np.isfinite(ctx.ms.values["separation"])):
         m.unavailable = "Needs 3D landmarks, which this pose estimator did not provide."
         return m
-    idx = _select(ctx, "counter", m, what="No frames with enough lean (8 deg) to tell which way the skier is turning.")
+    phase = None
+    if ctx.ms.is_video:
+        if not ctx.turns:
+            m.unavailable = ("No turns were found, so the second half of each turn, where counter shows, "
+                             "cannot be located.")
+            return m
+        phase = _finish_phase_mask(ctx)
+    idx = _select(ctx, "counter", m, phase,
+                  what="Too few frames in the second half of a turn with enough lean (8 deg) to tell which way the skier is turning.")
     if idx is None:
         return m
     v = ctx.ms.values["counter"][idx]
     m.value = float(np.median(v))
-    n_turns = len(ctx.turns) if ctx.ms.is_video and ctx.turns else None
+    n_turns = None
+    if ctx.ms.is_video:
+        n_turns = sum(1 for t in ctx.turns if np.any((idx >= t.peak) & (idx <= t.end))) or None
+    else:
+        m.notes.append("Stills: the turn phase is unknown, so this uses every leaning frame. Counter shows in the "
+                       "second half of a turn; stills from the first half read low.")
     m.n_turns = n_turns
     m.spread = robust_se(v, n_turns if n_turns else _n_independent(ctx, len(idx)))
     m.sample_factor = _sample_factor(ctx, len(idx), n_turns)

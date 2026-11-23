@@ -163,6 +163,33 @@ def test_counter_undefined_without_lean():
     assert "counter" not in M.frame_metrics(f)
 
 
+def test_collapsed_world_body_gives_no_3d_metrics():
+    # distant skiers sometimes get a 3D body whose left and right joints sit on top of each other
+    f = make_frame(SkierParams(heading_deg=180, inclination_deg=25, shoulder_yaw_deg=-18))
+    assert M.world_plausible(f.world) and "world_rejected" not in M.frame_metrics(f)
+    w = f.world
+    for left, right in ((K.L_SHOULDER, K.R_SHOULDER), (K.L_HIP, K.R_HIP)):
+        mid = (w[left] + w[right]) / 2
+        w[left], w[right] = mid + (w[left] - mid) * 0.2, mid + (w[right] - mid) * 0.2
+    assert not M.world_plausible(w)
+    m = M.frame_metrics(f)
+    assert m["world_rejected"][0] == 1.0
+    for name in ("separation", "separation_pelvis", "counter", "stance_width_3d", "knee_mean", "hip_angle"):
+        assert name not in m, name                  # no 3D value, and no silent fall-back to 2D joint angles
+    assert "inclination" in m and "edge_proxy" in m  # 2D image-plane metrics are unaffected
+
+
+def test_impossible_separation_from_swapped_labels_is_dropped():
+    # left/right labels swapped between upper and lower body flips the feet heading by ~180 deg
+    f = make_frame(SkierParams(heading_deg=180, inclination_deg=25, shoulder_yaw_deg=-18))
+    w = f.world
+    for heel, toe in ((K.L_HEEL, K.L_TOE), (K.R_HEEL, K.R_TOE)):
+        w[heel], w[toe] = w[toe].copy(), w[heel].copy()
+    m = M.frame_metrics(f)
+    assert "separation" not in m and "counter" not in m
+    assert "separation_pelvis" in m                 # shoulders vs pelvis is still consistent
+
+
 def test_no_3d_means_no_rotation_metrics():
     f = make_frame(SkierParams(heading_deg=180, shoulder_yaw_deg=20), with_world=False)
     m = M.frame_metrics(f)

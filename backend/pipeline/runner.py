@@ -165,6 +165,10 @@ def run_validation(assessment: Assessment, media_paths: list[str], out_dir: str,
         warnings.append(f"A skier was found in only {int(detected.sum())} of {len(frames)} frames. Zoom/crop the media so the skier fills more of the frame.")
     elif confident.mean() < 0.6:
         warnings.append(f"Only {int(confident.sum())} of {len(frames)} frames have a confident pose; verdicts rest on those frames alone.")
+    rejected_3d = int(np.sum(np.isfinite(ms.values["world_rejected"])))
+    if detected.sum() and rejected_3d / detected.sum() >= 0.10:
+        warnings.append(f"The 3D pose looked collapsed in {rejected_3d} of {int(detected.sum())} detected frames (usually a skier "
+                        "too small in the frame); those frames were left out of rotation, joint-angle and 3D stance measurements.")
     if media_info.get("truncated"):
         warnings.append(f"Only the first {max_seconds:.0f} s of the clip were analysed.")
     if is_video and ms.view in ("frontal", "oblique") and not ctx.turns:
@@ -189,7 +193,7 @@ def run_validation(assessment: Assessment, media_paths: list[str], out_dir: str,
         "media": media_info,
         "pose": {
             "estimator": est.name, "frames": len(frames), "frames_detected": int(detected.sum()),
-            "frames_confident": int(confident.sum()),
+            "frames_confident": int(confident.sum()), "frames_3d_rejected": rejected_3d,
             "mean_confidence": round(float(ms.pose_conf[detected].mean()), 3) if detected.any() else 0.0,
             "has_3d": seq.has_world, "smoothing": smooth_stats,
         },

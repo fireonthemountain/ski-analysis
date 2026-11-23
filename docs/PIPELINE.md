@@ -61,13 +61,20 @@ A metric is only produced for a frame when every landmark it needs has visibilit
 | Hip angle | torso axis vs thigh, 3D | 3D or side view |
 | Flexion/extension range | 90th − 10th percentile of knee angle | video ≥ 2 s |
 | Separation | yaw of the shoulder line minus yaw of the feet (heel→toe), 3D; falls back to shoulders vs pelvis | 3D |
-| Counter / rotation | separation signed by turn direction: + = upper body faces the outside of the turn | 3D + front/back view |
+| Counter / rotation | separation signed by turn direction, median over the **second half of each turn** (peak lean → edge change): + = upper body faces the outside of the turn. A downhill-facing upper body faces the *inside* of the turn before the fall line, so a whole-turn median cancels to ~0 | 3D + front/back view; video needs segmented turns |
 | Turn shape | fraction of the turn elapsed when lean reaches 70 % of its peak (sine ≈ 0.25, snapped edge < 0.1) | video, ≥ 2 complete turns |
 | Symmetry | (right peak lean − left peak lean) / mean | video, both directions |
 | Pole plant timing (experimental) | a ≥ 0.12-torso-length downward reach of the new inside wrist near each edge change, timed as a fraction of turn duration | video, ≥ 3 edge changes |
 
 Camera view is auto-detected from how wide the shoulders/hips look across the torso axis
 (≥ 0.62 = front/back, ≤ 0.27 = side, between = oblique) and can be set by hand in the form.
+
+3D sanity gates (per frame): a 3D body with shoulder joints < 0.20 m or hip joints < 0.10 m apart is "collapsed"
+(seen on distant skiers) and that frame gets no 3D metrics: rotation, 3D stance width, joint angles. There is no 2D
+fallback, so foreshortened angles never mix in. A separation beyond ±110° (anatomically impossible; it comes from left/right labels
+swapped between upper and lower body) is dropped too. `result.json` reports `pose.frames_3d_rejected`, and the run
+warns when that is ≥ 10 % of detected frames. Evidence frames show the frame nearest the reported value (and the
+5th/95th percentile frames for range ends), not the extreme frame, which is usually a bad pose.
 
 ## Thresholds (defaults — tune in `backend/pipeline/assessment.py`)
 
@@ -107,11 +114,13 @@ pole-plant timing need video and say so.
 
 ## Known limits
 
-- **No real-footage validation yet.** Automated tests use a synthetic stick figure with known angles (metric maths,
-  segmentation, verdict logic, API). MediaPipe does not see a stick figure as a person, so its accuracy on a skier in
-  bulky clothing at distance is unmeasured here. Check the skeleton overlay on your own footage before trusting numbers.
+- **Real-footage validation so far: public instructor clips only** (ANALYSIS-2026-11.md §9). They confirmed the 3D axis
+  convention and the separation/turn-direction signs, and that detection is reliable once the skier is ≥ ~15 % of
+  frame height. The thresholds are still uncalibrated defaults. Check the skeleton overlay on your own footage before
+  trusting numbers.
 - Angles in the image plane are relative to image vertical: camera roll or a side-hill biases lean, edge angle, symmetry.
 - Edge angle is a shin-tilt proxy; skis are not tracked. Pole plants are inferred from the hand; poles are not tracked.
-- Depth is estimated from one camera: separation/counter are capped at 0.6 confidence.
+- Depth is estimated from one camera: separation/counter are capped at 0.6 confidence. Counter's measurement
+  uncertainty on real footage is about ±9–10°, so it only reaches a verdict when counter is clearly beyond about ±20°.
 - One skier. One run at a time (in-process queue). The follow-cam case (camera moving with the skier) is fine for
   joint angles; nothing here uses the skier's path through the image.
