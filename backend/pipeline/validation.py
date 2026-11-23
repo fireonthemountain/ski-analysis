@@ -57,6 +57,7 @@ class Context:
     ms: MetricSeries
     turns: list[Turn]
     incl_smooth: np.ndarray
+    not_skiing: Optional[str] = None     # set when the footage is not skiing (e.g. seated on a lift)
 
     @property
     def n(self) -> int:
@@ -599,7 +600,9 @@ def validate(assessment: Assessment, ctx: Context) -> list[dict]:
     results = []
     for a in assessment.items:
         item = CATALOG_BY_ID[a.item_id]
-        if item.needs_video and not ctx.ms.is_video:
+        if ctx.not_skiing:
+            m = Measurement(method=item.measure, unavailable=ctx.not_skiing)
+        elif item.needs_video and not ctx.ms.is_video:
             m = Measurement(method=item.measure,
                             unavailable="Needs video: this is about movement over time and cannot be read from still frames.")
         else:

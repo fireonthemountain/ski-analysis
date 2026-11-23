@@ -191,6 +191,15 @@ def test_broken_ffmpeg_counts_as_missing(tmp_path, monkeypatch):
     assert (tmp_path / "clip.mp4").stat().st_size > 0 and out.endswith("clip.mp4")
 
 
+def test_not_skiing_makes_every_item_inconclusive_and_a_normal_run_is_not_flagged():
+    a = Assessment(items=[{"item_id": k, "rating": v} for k, v in GOOD.items()])
+    _, _, ctx, _ = analyze_sequence(run_sequence(spec_good()), a)
+    assert ctx.not_skiing is None                                    # a standing synthetic skier is not "seated"
+    ctx.not_skiing = "seated on a chairlift"
+    res = validate(a, ctx)
+    assert all(r["verdict"] == "inconclusive" and r["reason"] == "seated on a chairlift" for r in res)
+
+
 def test_wrong_assessment_disagrees():
     wrong = dict(stance_width="narrow", stance_height="tall", vertical_movement="static", edge_angle="high",
                  angulation="banked", turn_shape="abrupt", turn_symmetry="left_stronger", pole_plant="none",

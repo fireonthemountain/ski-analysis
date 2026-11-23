@@ -67,6 +67,7 @@ class PoseFrame:
     vis: np.ndarray = field(default_factory=lambda: np.zeros(N_KP))
     world: Optional[np.ndarray] = None
     source: str = ""           # file name (stills) or source frame number (video)
+    appearance: Optional[np.ndarray] = None   # torso colour signature (identity.torso_signature), video only
 
     def core_confidence(self) -> float:
         """Mean visibility of the 8 core joints (0 when nothing was detected)."""
