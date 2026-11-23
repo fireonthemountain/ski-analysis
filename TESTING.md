@@ -1,373 +1,82 @@
-# Testing Guide - Ski Analysis
+# Testing
 
-This guide helps you test the Ski Analysis application with real skiing photos and understand how the analysis aligns with PSIA (Professional Ski Instructors of America) standards.
+Two kinds of testing: the automated suite (synthetic data with known answers), and checking the app on real ski
+footage. Design and thresholds: [docs/PIPELINE.md](docs/PIPELINE.md). What has been validated so far:
+[ANALYSIS-2026-11.md](ANALYSIS-2026-11.md) §9–12.
 
-## 🎯 Quick Start Testing
-
-### 1. Get Sample Images
-
-**Where to Find Good Skiing Photos:**
-
-- **Your Own Photos**: Best for personal analysis
-  - Action photos from friends/family skiing
-  - GoPro screenshots from ski videos
-  - Photos from ski trips
-
-- **Stock Photography** (Free):
-  - [Unsplash](https://unsplash.com/s/photos/skiing) - Search "skiing"
-  - [Pexels](https://www.pexels.com/search/skiing/) - Free skiing photos
-  - [Pixabay](https://pixabay.com/images/search/skiing/) - Royalty-free images
-
-- **Instructional Content**:
-  - PSIA website educational materials
-  - Ski instructor YouTube channels (screenshots)
-  - Ski resort lesson photos
-
-**What Makes a Good Test Photo:**
-- ✅ Full body visible (head to feet)
-- ✅ Side view or 3/4 angle (not straight-on)
-- ✅ Clear, well-lit image
-- ✅ Person in skiing stance/turn
-- ✅ Minimal obstruction (no poles/trees blocking body)
-- ❌ Avoid: too zoomed out, blurry, or extreme angles
-
-### 2. Test Different Scenarios
-
-Create a test folder with images showing different scenarios:
+## Automated tests
 
 ```bash
-ski-analysis/
-└── test-images/
-    ├── good-form/
-    │   ├── expert-carving.jpg
-    │   ├── proper-stance.jpg
-    │   └── balanced-turn.jpg
-    ├── common-issues/
-    │   ├── sitting-back.jpg
-    │   ├── locked-knees.jpg
-    │   └── rotation.jpg
-    └── terrain-types/
-        ├── groomed.jpg
-        ├── moguls.jpg
-        └── powder.jpg
+cd backend && ./venv/bin/python -m pytest tests -q
+cd frontend && npm run build          # TypeScript type-check + production build
 ```
 
-### 3. Expected Results by Scenario
+| File | Covers |
+|---|---|
+| `backend/tests/test_metrics.py` | every per-frame metric on synthetic skeletons of known geometry (lean, angulation, edge proxy, stance width, knee/hip angles, fore-aft, separation, counter sign, 3D sanity gates, view classification) |
+| `backend/tests/test_validation.py` | smoothing, turn segmentation, every evaluator and verdict rule on scripted runs (correct and wrong assessments, borderline values, low confidence, wrong view, no 3D, counter on the turn finish phase, not-skiing short-circuit, broken ffmpeg fallback) |
+| `backend/tests/test_identity.py` | one-person tracking (switch detection, glitch rejection, returning person) and the seated check |
+| `backend/tests/test_e2e.py` | the HTTP API end to end with the marker estimator on rendered synthetic media |
 
-#### **Expert/Good Form**
-- Overall Score: 80-95
-- Forward Lean: 15-25°
-- Knee Flexion: 140-160°
-- Balance: 80-100
-- Recommendations: Mostly positive feedback
+The tests never load the MediaPipe model (`POSE_ESTIMATOR=marker`) and never touch `backend/data`. CI
+(`.github/workflows/ci.yml`) runs the backend suite and the frontend build on every push and pull request.
 
-#### **Common Issues**
-
-**Sitting Back (Backseat Skiing)**
-- Overall Score: 40-60
-- Forward Lean: <10°
-- Issue Detected: "Sitting back"
-- Recommendation: "Lean forward more from your ankles"
-
-**Locked Knees**
-- Overall Score: 50-70
-- Knee Flexion: >170°
-- Issue Detected: "Knees too straight"
-- Recommendation: "Flex your knees more"
-
-**Poor Balance**
-- Overall Score: 40-65
-- Balance Score: <60
-- Issue Detected: "Off-center balance"
-
-## 🎓 PSIA Standards Reference
-
-Our analysis is based on PSIA (Professional Ski Instructors of America) Level I-III standards.
-
-### PSIA Core Movements
-
-**1. Control of Edge Angle** (Not in V1 - static images)
-- Edge angle management
-- Progressive engagement
-- Smooth transitions
-
-**2. Control of Pressure** ✅ (Analyzed)
-- **Forward/Aft Balance**: Forward lean angle (15-25° ideal)
-- **Inside/Outside Balance**: Weight distribution, balance score
-- **Progressive Pressure**: Knee flexion indicates pressure capability
-
-**3. Control of Rotation** ✅ (Analyzed)
-- **Upper/Lower Body Separation**: Shoulder alignment
-- **Counter**: Hip-ankle alignment
-- **Rotary Movements**: Not measurable in static images
-
-**4. Control of Speed** (Not in V1 - requires video)
-- Turn shape
-- Timing
-
-**5. Flexibility & Range of Motion** ✅ (Analyzed)
-- **Knee Flexion**: 140-160° optimal
-- **Ankle Flex**: Measured via forward lean
-- **Hip Angulation**: Hip-ankle alignment
-
-### PSIA Stance Analysis
-
-Our analysis evaluates these PSIA-defined stance elements:
-
-| PSIA Element | Our Metric | Ideal Range | What We Measure |
-|--------------|------------|-------------|-----------------|
-| **Athletic Stance** | Knee Flexion | 140-160° | Bend in knees for absorption |
-| **Forward Lean** | Forward Lean Angle | 15-25° | Shin pressure on boot tongue |
-| **Centered Stance** | Hip-Ankle Alignment | <0.05 normalized | Vertical stacking |
-| **Level Shoulders** | Shoulder Alignment | <5° | Upper body stability |
-| **Balanced COM** | Balance Score | >80/100 | Center of mass over feet |
-
-### PSIA Levels Alignment
-
-**Level I (Beginner/Intermediate)**
-- Focus: Basic stance, balance, wedge turns
-- Our Analysis: Identifies fundamental issues (sitting back, locked knees)
-
-**Level II (Advanced/Expert)**
-- Focus: Parallel turns, varied terrain, dynamic balance
-- Our Analysis: Scores stance quality, separation, balance
-
-**Level III (Expert/Instructor)**
-- Focus: All conditions, refined technique, demonstration quality
-- Our Analysis: Provides specific metrics for refinement
-
-## 📸 Sample Test Cases
-
-### Test Case 1: Expert Carver
-**Expected Metrics:**
-```
-Forward Lean: 20-25°
-Knee Flexion: 145-155°
-Balance: 85-95
-Shoulder Level: <3°
-Overall Score: 85-95
-```
-
-**Expected Recommendations:**
-- "Good technique!"
-- "Maintain this position while skiing dynamically"
-
-### Test Case 2: Backseat Skier
-**Expected Metrics:**
-```
-Forward Lean: 5-8°
-Knee Flexion: 160-170°
-Balance: 50-65
-Overall Score: 45-60
-```
-
-**Expected Recommendations:**
-- HIGH: "Sitting back - Lean forward from ankles"
-- MEDIUM: "Flex knees more for athletic stance"
-
-### Test Case 3: Over-Flexed/Hunched
-**Expected Metrics:**
-```
-Forward Lean: 30-40°
-Knee Flexion: 120-130°
-Balance: 60-75
-Overall Score: 55-70
-```
-
-**Expected Recommendations:**
-- MEDIUM: "Too far forward - reduce lean slightly"
-- MEDIUM: "Over-flexed knees - stand up slightly"
-
-## 🧪 Testing Procedure
-
-### Manual Testing
-
-1. **Start the Application**
-```bash
-# Terminal 1 - Backend
-cd ski-analysis/backend
-python main.py
-
-# Terminal 2 - Frontend
-cd ski-analysis/frontend
-npm run dev
-```
-
-2. **Open Browser**
-```
-http://localhost:5173
-```
-
-3. **Test Upload**
-- Drag & drop a skiing photo
-- Wait for analysis (~2-3 seconds)
-- Review results
-
-4. **Verify Results**
-- ✅ Skeleton overlay shows all body points
-- ✅ Overall score is reasonable (30-95)
-- ✅ Metrics make sense for the pose
-- ✅ Recommendations align with visible issues
-- ✅ Toggle works between original/skeleton
-
-### Batch Testing (Coming Soon)
+## Quick check without footage
 
 ```bash
-# Test multiple images
-cd ski-analysis/scripts
-python batch_test.py --input ../test-images/ --output results.csv
+backend/venv/bin/python scripts/make_sample_media.py     # renders examples/synthetic/ (stick figure + ground truth)
+POSE_ESTIMATOR=marker scripts/run_dev.sh                 # MediaPipe doesn't see a stick figure as a person
 ```
 
-## 🔍 What to Look For
+Open http://localhost:5177, upload `examples/synthetic/synthetic_run_front.mp4`, rate a few items, and compare the
+measured values with `examples/synthetic/ground_truth.json`.
 
-### Good Detection Signs
-- ✅ All 33 landmarks visible in skeleton
-- ✅ Lines connect body parts correctly
-- ✅ Pose looks "locked on" to skier
-- ✅ Metrics are in reasonable ranges
-- ✅ Recommendations make sense
+## Testing with real footage
 
-### Poor Detection Signs
-- ❌ Missing landmarks (visibility issues)
-- ❌ Landmarks in wrong places
-- ❌ Metrics seem way off
-- ❌ Error: "No pose detected"
+### Film it so it can be measured
 
-**If Detection Fails:**
-- Try different angle/photo
-- Ensure full body is visible
-- Check lighting isn't too dark
-- Make sure skier isn't too small in frame
+- **One continuous shot, one skier**, 10–30 s, at least 3 turns. Edited videos with camera cuts: see below.
+- **Skiing toward (or away from) the camera** for edging, angulation, rotation/counter, turn shape, symmetry and pole
+  plants; **side-on** for fore-aft.
+- **Big enough:** the skier at least ~15% of the frame height (about 160 px in 1080p). Below ~8% detection mostly fails.
+  Zoom rather than walk closer.
+- **Boots visible.** The feet set the ski direction for separation and counter.
+- No slow motion (it distorts the timing items).
 
-## 📊 Expected Accuracy
+### Run it
 
-**What Works Well:**
-- ✅ Clear, well-lit photos
-- ✅ Full body visible
-- ✅ Side/3-4 angle views
-- ✅ Contrasting colors (skier vs background)
-- ✅ Relatively close-up shots
+UI: `scripts/run_dev.sh`, then open the URL it prints. Or the command line:
 
-**Limitations:**
-- ⚠️ Very distant shots (skier too small)
-- ⚠️ Extreme angles (straight from front/back)
-- ⚠️ Heavy occlusion (trees, other people)
-- ⚠️ Motion blur (use sharper images)
-- ⚠️ Low light/dark images
+```bash
+cd backend
+./venv/bin/python -m pipeline.cli --list-items                     # items and rating options
+cp ../examples/assessment.example.json ~/my_run.json               # set your ratings BEFORE looking at results
+./venv/bin/python -m pipeline.cli --assessment ~/my_run.json ~/Movies/my_run.mov --out ~/my_run_validation
+```
 
-## 🎯 Interpreting Scores
+`--out` holds `result.json`, the annotated evidence frames (`frames/`) and `annotated.mp4` (needs a working
+`ffmpeg`). Keep it out of the repo: it contains images of you.
 
-### Overall Score Ranges
+### Edited videos (several camera shots)
 
-**90-100**: Elite/Competition Level
-- Nearly perfect technique
-- PSIA Level III demonstration quality
-- Minor refinements only
+```bash
+scripts/validate_shots.sh VIDEO START END ASSESSMENT.json OUTDIR
+```
 
-**80-89**: Expert/Advanced
-- Strong technique
-- PSIA Level II/III range
-- Some areas for improvement
+Cuts the section out, splits it at camera cuts, validates every shot of at least 3 s, and writes `OUTDIR/summary.md`
+with one row per shot. Shots longer than 40 s are listed as probably several camera shots (flat light can hide cuts).
 
-**70-79**: Advanced Intermediate
-- Good fundamentals, room to grow
-- PSIA Level I/II range
-- Several improvement areas
+### Read the results
 
-**60-69**: Intermediate
-- Adequate technique with issues
-- Working toward PSIA Level I
-- Multiple technique issues
+1. **Look at the overlay first** (`annotated.mp4` or the evidence frames). If the skeleton isn't on the skier, the
+   numbers mean nothing.
+2. **Read the warnings**: few confident frames, collapsed 3D poses, a person switch, "seated, not skiing".
+3. **Inconclusive is an answer**: it says why (wrong view, too few frames, borderline). It never guesses.
+4. A *disagree* with high confidence is where your eye and the measurement differ most. Check those frames.
 
-**50-59**: Beginner/Intermediate
-- Fundamental issues present
-- Pre-PSIA Level I
-- Needs instruction
+### What has been checked on real footage
 
-**<50**: Beginner/Learning
-- Significant technique issues
-- Beginner stage
-- Focus on basics needed
-
-## 🔬 Advanced Testing
-
-### Compare Against References
-
-1. Find professional ski photos (Olympic skiers, instructors)
-2. Upload and analyze
-3. Use as baseline for "perfect" scores
-4. Compare your photos to these benchmarks
-
-### Progression Tracking
-
-1. Take photos at start of season
-2. Analyze and save scores
-3. Take lessons, practice
-4. Take new photos mid/end of season
-5. Compare scores to track improvement
-
-## 📝 Known Limitations (V1)
-
-**Static Image Constraints:**
-- ❌ Cannot measure edge angle (camera angle dependent)
-- ❌ Cannot assess turn dynamics (need video)
-- ❌ Cannot evaluate rhythm/timing
-- ❌ Cannot measure speed control
-- ❌ One moment in time only
-
-**Future Enhancements:**
-- Video analysis for dynamic metrics
-- Multiple-angle fusion
-- Terrain-aware analysis
-- Equipment detection
-
-## 🆘 Troubleshooting
-
-### "No pose detected in image"
-**Solutions:**
-- Ensure full body visible (head to feet)
-- Try better lighting
-- Use higher resolution image
-- Make sure skier isn't too far away
-- Avoid extreme angles
-
-### Scores seem wrong
-**Possible Causes:**
-- Camera angle affects measurements
-- Clothing/gear obscuring body
-- Unusual pose or position
-- Try different photo of same person
-
-### Skeleton overlay looks weird
-**Possible Causes:**
-- Low visibility landmarks
-- Photo quality issues
-- Unusual camera angle
-- Try clearer image
-
-## 📚 Additional Resources
-
-**PSIA Standards:**
-- [PSIA-AASI Website](https://www.thesnowpros.org/)
-- PSIA Alpine Technical Manual
-- PSIA Level I-III Exam Guides
-
-**Skiing Technique:**
-- Ski Magazine technique articles
-- Warren Smith Ski Academy (YouTube)
-- Elate Media Ski Tutorials
-- Stomp It Tutorials
-
-**Sample Image Sources:**
-- Unsplash skiing collection
-- Pexels sports photography
-- Your own ski trip photos
-- Ski school websites
-
----
-
-**Ready to Test?** Start with 3-5 diverse images and see how the analysis performs!
-
-**Questions or Issues?** Check the main README or open an issue on GitHub.
-
-Happy Testing! 🎿
+Public instructor clips (Nordica Pro Series Level 1–3) confirmed the 3D axis convention and the rotation signs
+against the skier's actual path, ~0.1 s per frame on an M1 Mac mini, and that edge angle and knee flexion rank the
+three levels correctly. Not done: calibrating the thresholds against a skier's own rated clips (runbook in
+ANALYSIS-2026-11.md §9).

@@ -27,8 +27,8 @@ A low-confidence pose, the wrong camera angle, or a value too close to a thresho
 *inconclusive* with the reason, never a guessed verdict. Design, metrics and thresholds:
 [docs/PIPELINE.md](docs/PIPELINE.md). Current state and test results: [ANALYSIS-2026-11.md](ANALYSIS-2026-11.md).
 
-> Accuracy on real ski footage has not been validated yet. The automated tests use a synthetic
-> stick figure with known angles. Check the skeleton overlay on your footage before trusting a number.
+> Real-footage checks so far use public instructor clips (ANALYSIS-2026-11.md §9–12); the thresholds are not yet
+> calibrated against your own judgement. Check the skeleton overlay on your footage before trusting a number.
 
 ---
 
@@ -78,7 +78,7 @@ marker estimator): `backend/venv/bin/python scripts/make_sample_media.py`, then
 ### Tests
 
 ```bash
-cd backend && ./venv/bin/python -m pytest tests -q        # 116 tests
+cd backend && ./venv/bin/python -m pytest tests -q
 cd frontend && npm run build                              # type-check + build
 ```
 
@@ -93,184 +93,88 @@ docker compose up
 
 ## 🏗️ Architecture
 
-### Tech Stack
+| Layer | What | Where |
+|---|---|---|
+| UI | React 18 + TypeScript + Vite: assessment form, results (agreement table, evidence frames, annotated video, charts), history | `frontend/` (dev server :5177) |
+| API | FastAPI: `/api/v1/assessment/catalog`, `/api/v1/validations` (upload, list, get, files, delete), `/health` | `backend/main.py`, `backend/api/validations.py` (:8003) |
+| Pipeline | ingest → pose → identity → smoothing → metrics → turn segmentation → per-item measurement → verdict | `backend/pipeline/` |
+| Pose | MediaPipe Pose Landmarker (heavy by default; `POSE_MODEL=full\|lite`), 2D + 3D world landmarks | `backend/pipeline/pose.py` |
+| Storage | SQLite + files under `backend/data/` by default; PostgreSQL + MinIO only with `docker compose` | `backend/config.py` |
+| Jobs | one in-process worker thread; queued runs are marked failed if the server restarts | `backend/api/validations.py` |
 
-**Frontend:**
-- React 18 + TypeScript
-- Vite (build tool)
-- React Dropzone (file uploads)
-- Responsive design
-
-**Backend:**
-- Python 3.11 + FastAPI
-- MediaPipe (pose detection)
-- OpenCV (image processing)
-- SQLAlchemy (ORM)
-- PostgreSQL (database)
-- MinIO/S3 (storage)
-
-**Infrastructure:**
-- Docker Compose (local dev)
-- RESTful API design
-- CORS-enabled for local development
-
-### Project Structure
+The original single-photo scoring endpoints (`/api/v1/videos`, `/api/v1/analysis`, `backend/analysis/`) are still
+in `main.py` for compatibility, but the UI no longer uses them. Details: [docs/architecture.md](docs/architecture.md).
 
 ```
 ski-analysis/
-├── frontend/               # React web application
-│   ├── src/
-│   │   ├── components/    # VideoUpload, AnalysisResults, etc.
-│   │   ├── App.tsx        # Main app component
-│   │   └── ...
-│   └── package.json
-├── backend/               # Python FastAPI server
-│   ├── main.py           # FastAPI app and endpoints
-│   ├── analysis/         # Pose detection & technique analysis
-│   │   ├── pose_detector.py       # MediaPipe integration
-│   │   └── technique_analyzer.py  # PSIA scoring logic
-│   ├── database/         # SQLAlchemy models
-│   └── requirements.txt
-├── scripts/              # Testing and utilities
-│   ├── batch_test.py            # Batch image processing
-│   └── setup_test_images.sh     # Download test images
-├── examples/             # Sample results and data
-├── docs/                 # Documentation
-│   ├── architecture.md
-│   ├── technique-guide.md
-│   └── ...
-├── docker-compose.yml
-├── TESTING.md           # Comprehensive testing guide
-└── README.md
+├── backend/
+│   ├── pipeline/        # ingest, pose, identity, smoothing, metrics, segmentation, validation, runner, cli, report
+│   ├── api/             # validation API (+ X-User-Id identification)
+│   ├── tests/           # metric unit tests, engine tests, HTTP end-to-end tests
+│   └── main.py          # FastAPI app; serves frontend/dist when built
+├── frontend/src/        # App.tsx, components/ (AssessmentForm, ResultsView, Charts, History)
+├── scripts/             # run_dev.sh, make_sample_media.py, validate_shots.sh
+├── examples/            # assessment.example.json, synthetic/ stick-figure media with ground truth
+└── docs/                # PIPELINE.md (design, metrics, thresholds), architecture.md
 ```
 
 ---
 
 ## 📊 How It Works
 
-### Analysis Pipeline
+1. **Ingest:** a video is sampled at 15 fps (first 90 s), or 1–40 stills are loaded.
+2. **Pose:** MediaPipe finds the skier in each frame (tracking a crop, with full-frame and tiled fall-backs for distant
+   skiers). A torso-colour signature keeps the analysis on one person when several are close together.
+3. **Smoothing:** short gaps are filled, jitter low-passed, identity jumps rejected; filled frames are never evidence.
+4. **Metrics:** frontal-plane angles (lean, edge proxy, angulation, stance width) from 2D; rotation (separation,
+   counter) and joint angles from the 3D world landmarks, with sanity gates for collapsed or mislabelled poses.
+5. **Turns:** edge changes are the zero crossings of the smoothed lean; counter is judged on the second half of each turn.
+6. **Verdict:** each rated item gets a value ± uncertainty, then *agree* (inside your band by at least the
+   uncertainty), *disagree* (outside by at least it), or *inconclusive* (borderline, wrong view, too few frames, not
+   skiing...), plus a confidence score.
 
-1. **Image Upload** → User uploads skiing photo (JPG/PNG, max 10MB)
-2. **Pose Detection** → MediaPipe detects 33 body landmarks
-3. **Biomechanical Analysis** → Calculate angles, alignment, balance
-4. **PSIA Scoring** → Compare to professional ski instructor standards
-5. **Recommendations** → Generate coaching tips based on issues found
-6. **Visualization** → Overlay skeleton on original image
-
-### Metrics Explained
-
-| Metric | Optimal Range | What It Measures |
-|--------|---------------|------------------|
-| Forward Lean | 15-25° | Shin pressure on boot tongue (PSIA standard) |
-| Knee Flexion | 140-160° | Athletic stance, shock absorption |
-| Balance | 85-95/100 | Center of mass over feet |
-| Shoulder Level | <5° tilt | Upper body stability |
-| Hip-Ankle Alignment | <10° offset | Vertical stacking |
-
-### Scoring System
-
-- **90-100:** Elite (PSIA Level III demonstration quality)
-- **80-89:** Expert (PSIA Level II-III)
-- **70-79:** Advanced (PSIA Level I-II)
-- **60-69:** Intermediate (working toward Level I)
-- **50-59:** Beginner+ (fundamental issues present)
-- **<50:** Learning stage
+Items, thresholds and confidence rules: [docs/PIPELINE.md](docs/PIPELINE.md). The thresholds are engineering
+defaults, not published PSIA numbers, and are not yet calibrated against your own judgement.
 
 ---
 
 ## 🧪 Testing
 
-See [TESTING.md](TESTING.md) for comprehensive testing guide and [QUICKSTART_TESTING.md](QUICKSTART_TESTING.md) for quick demo.
-
-### Quick Test
-
 ```bash
-# 1. Get a skiing photo (full body visible, side/3-4 angle)
-# 2. Start the app (see Quick Start above)
-# 3. Open http://localhost:5173
-# 4. Drag & drop your photo
-# 5. View instant analysis with skeleton overlay!
+cd backend && ./venv/bin/python -m pytest tests -q     # unit, engine and HTTP end-to-end tests
+cd frontend && npm run build                           # type-check + build
 ```
 
-### Automated Testing
-
-```bash
-# Download curated test images
-cd scripts
-./setup_test_images.sh
-
-# Run batch analysis
-python batch_test.py --input ../test-images --output results.csv
-```
-
-**Sample Results:** See [examples/README.md](examples/README.md) for detailed analysis of test results showing scores from 87.3 (expert) to 47.3 (beginner).
+CI runs both on every push and pull request. For real footage (filming tips, the CLI, splitting an edited video
+into shots with `scripts/validate_shots.sh`, how to read the results) see [TESTING.md](TESTING.md).
 
 ---
 
 ## 📚 Documentation
 
-- **[TESTING.md](TESTING.md)** - Comprehensive testing guide with PSIA standards
-- **[QUICKSTART_TESTING.md](QUICKSTART_TESTING.md)** - Quick testing walkthrough
-- **[docs/architecture.md](docs/architecture.md)** - System architecture and design
-- **[docs/technique-guide.md](docs/technique-guide.md)** - Skiing technique reference
-- **[examples/README.md](examples/README.md)** - Sample results and interpretation
-- **[scripts/README.md](scripts/README.md)** - Testing scripts documentation
-- **[CONTRIBUTING.md](CONTRIBUTING.md)** - How to contribute
-- **[OPEN_SOURCE_CHECKLIST.md](OPEN_SOURCE_CHECKLIST.md)** - Open source release guide
-- **[PRODUCTION_ROADMAP.md](PRODUCTION_ROADMAP.md)** - Commercial product roadmap
+- **[docs/PIPELINE.md](docs/PIPELINE.md)** - design, items, metrics, thresholds, verdict rules, known limits
+- **[ANALYSIS-2026-11.md](ANALYSIS-2026-11.md)** - project state, real-footage checks (§9–12), what is validated
+- **[TESTING.md](TESTING.md)** - automated tests and how to test with real footage
+- **[docs/architecture.md](docs/architecture.md)** - components, request flow, storage, deployment
+- **[scripts/README.md](scripts/README.md)** - the helper scripts
+- **[docs/technique-guide.md](docs/technique-guide.md)** - skiing technique reference
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** - how to contribute
+- **[RECREATION_PROMPT.md](RECREATION_PROMPT.md)** - brief for rebuilding the project from scratch
 
 ---
 
 ## 🗺️ Roadmap
 
-### ✅ Phase 1 - MVP (Complete!)
-- [x] Photo upload and processing
-- [x] Pose detection with MediaPipe
-- [x] PSIA-aligned technique analysis
-- [x] Skeleton visualization
-- [x] Scoring and recommendations
-- [x] Batch testing tools
-- [x] Comprehensive documentation
+**Done:** validation pipeline for video and stills, assessment form and results UI, CLI, CI, real-footage checks on
+public instructor clips (3D axis convention and rotation signs confirmed, counter scored on the turn finish phase,
+seated / not-skiing detection, one-person tracking).
 
-### 🔜 Phase 2 - Enhanced Features (Next)
-- [ ] Video analysis (frame-by-frame)
-- [ ] User authentication and profiles
-- [ ] Upload history and progress tracking
-- [ ] Side-by-side comparison
-- [ ] Download analyzed images
-- [ ] PDF report generation
+**Next:**
+- Calibrate the thresholds against your own rated clips (the runbook is in ANALYSIS-2026-11.md §9)
+- Pick the skier / trim the clip in the upload form for footage with several people
+- A persistent job queue; side-view turn segmentation; slope correction for fore-aft
 
-### 🔮 Phase 3 - Advanced
-- [ ] Custom ML model training on skiing dataset
-- [ ] Terrain recognition (groomed, moguls, powder)
-- [ ] Multi-angle photo fusion
-- [ ] Coach/student mode
-- [ ] Mobile app (iOS/Android)
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! This project is ideal for:
-- 🐍 Python developers (backend/ML)
-- ⚛️ React developers (frontend)
-- 🎿 Ski instructors (domain expertise)
-- 🧪 Testers (accuracy validation)
-- 📝 Technical writers (documentation)
-
-**How to contribute:**
-
-1. Read [CONTRIBUTING.md](CONTRIBUTING.md)
-2. Check [open issues](https://github.com/fireonthemountain/ski-analysis/issues)
-3. Look for "good first issue" labels
-4. Fork, code, test, submit PR!
-
-**Areas needing help:**
-- Accuracy validation with real skiers
-- Video analysis implementation
-- Mobile app development
-- UI/UX improvements
-- Documentation and tutorials
+**Later:** progress tracking across runs, coach/student sharing, a comparison view.
 
 ---
 
@@ -298,13 +202,14 @@ This project is licensed under the **MIT License** - see [LICENSE](LICENSE) for 
 
 ## 🐛 Known Limitations
 
-- 📷 **Camera angle matters:** Side or 3/4 angle works best; front/back views less accurate
-- 🖼️ **Static analysis only:** Current version analyzes photos, not video dynamics
-- 📏 **Perspective affects measurements:** Metrics can vary ±5-10° based on camera angle
-- ⛷️ **Terrain-agnostic:** Doesn't adjust for moguls, powder, park, etc. (yet)
-- 👤 **Single person:** Only analyzes one skier per photo
-
-See [TESTING.md](TESTING.md) for detailed accuracy considerations.
+- **Thresholds are uncalibrated defaults.** They have been checked against expert demos, not against your judgement.
+- **Camera view matters.** Edging, angulation, rotation and turns need a front or back view; fore-aft needs side-on.
+  The app says so instead of guessing.
+- **Distance matters.** Detection is reliable once the skier is at least ~15% of the frame height.
+- **Depth comes from one camera.** Separation and counter are capped at 0.6 confidence.
+- **One skier.** With several people close together the longest track is kept; people in identical clothing can't
+  be told apart, so trim or crop multi-person footage.
+- **Image-plane angles assume a level camera.** Camera roll or a side-hill biases lean, edge angle and symmetry.
 
 ---
 
