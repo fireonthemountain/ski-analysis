@@ -1,0 +1,20 @@
+{
+  "run_label": "Example: blue groomer, run 3",
+  "skier": "me",
+  "assessed_by": "me",
+  "terrain": "groomed blue, firm",
+  "camera_view": "auto",
+  "general_notes": "Filmed from below, skier coming toward the camera.",
+  "items": [
+    {"item_id": "stance_width", "rating": "functional"},
+    {"item_id": "edge_angle", "rating": "moderate", "notes": "decent angles on left turns"},
+    {"item_id": "angulation", "rating": "moderate"},
+    {"item_id": "separation", "rating": "moderate"},
+    {"item_id": "counter", "rating": "square"},
+    {"item_id": "stance_height", "rating": "athletic"},
+    {"item_id": "vertical_movement", "rating": "moderate"},
+    {"item_id": "turn_shape", "rating": "round"},
+    {"item_id": "turn_symmetry", "rating": "symmetric"},
+    {"item_id": "pole_plant", "rating": "on_time"}
+  ]
+}

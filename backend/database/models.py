@@ -1,14 +1,21 @@
 """
 Database models for ski analysis application.
 """
-from sqlalchemy import Column, String, Float, Integer, DateTime, Text, ForeignKey, Enum
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy import Column, String, Float, Integer, DateTime, Text, ForeignKey, Enum, JSON, Uuid
+from sqlalchemy.dialects.postgresql import JSONB as _PG_JSONB
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import uuid
 import enum
 
 from .connection import Base
+
+# Portable column types: native UUID/JSONB on PostgreSQL, CHAR(32)/JSON on SQLite.
+JSONB = JSON().with_variant(_PG_JSONB(), "postgresql")
+
+
+def UUID(as_uuid: bool = True):
+    return Uuid(as_uuid=as_uuid)
 
 
 class SkillLevel(str, enum.Enum):
@@ -122,3 +129,21 @@ class Progress(Base):
 
     # Relationships
     analysis = relationship("Analysis", back_populates="progress_entries")
+
+
+class ValidationRun(Base):
+    """One assessment-validation run: the assessor's ratings + the measured verdicts."""
+    __tablename__ = "validation_runs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    finished_at = Column(DateTime)
+    status = Column(Enum(ProcessingStatus), default=ProcessingStatus.PENDING, index=True)
+    error = Column(Text)
+    run_label = Column(String(200))
+    media_kind = Column(String(20))          # video | images
+    media_files = Column(JSONB)              # original file names
+    assessment = Column(JSONB)               # the Assessment as submitted
+    summary = Column(JSONB)                  # agree / disagree / inconclusive counts
+    result_dir = Column(Text)                # folder holding result.json, frames/, annotated.mp4

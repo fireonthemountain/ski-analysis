@@ -1,18 +1,18 @@
 """
 Main FastAPI application entry point for Ski Analysis API.
 """
+from contextlib import asynccontextmanager
+from datetime import datetime
+from typing import Optional
+import os
+import uuid
+
 from fastapi import FastAPI, File, UploadFile, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy.orm import Session
-from typing import List, Optional
-import os
-import uuid
-import requests
-from datetime import datetime
-from dotenv import load_dotenv
 
-# Import database and models
+import config
 from database import get_db, create_tables, Video, User, Analysis
 from database.models import ProcessingStatus
 from api.schemas import (
@@ -20,43 +20,47 @@ from api.schemas import (
     VideoListResponse,
     AnalysisResponse,
     UploadResponse,
-    ErrorResponse
 )
+from api.users import get_current_user
+from api.validations import router as validations_router, fail_interrupted_runs
 from processing import storage_service
 from analysis import pose_detector, technique_analyzer
 
-# Load environment variables
-load_dotenv()
 
-# Create FastAPI app
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    create_tables()
+    interrupted = fail_interrupted_runs()
+    print("Ski Analysis API ready", flush=True)
+    print(f"  This machine: http://localhost:{config.PORT}/api/docs")
+    for ip in config.lan_ips():
+        print(f"  LAN:          http://{ip}:{config.FRONTEND_PORT}  (dev UI)   http://{ip}:{config.PORT}/api/docs  (API)")
+    print(f"  Data dir:     {config.DATA_DIR}", flush=True)
+    if interrupted:
+        print(f"  Marked {interrupted} interrupted validation run(s) as failed")
+    yield
+
+
 app = FastAPI(
     title="Ski Analysis API",
-    description="API for analyzing ski technique from video footage",
-    version="0.1.0",
+    description="Validates a ski-technique assessment against pose measurements from video or stills",
+    version="0.2.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc",
+    lifespan=lifespan,
 )
 
-# Configure CORS
-origins = os.getenv("CORS_ORIGINS", "http://localhost:5177").split(",")
-
+# CORS: explicit origins from the environment, plus the dev UI opened from any private-LAN address.
+origins = [o.strip() for o in os.getenv("CORS_ORIGINS", f"http://localhost:{config.FRONTEND_PORT}").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|100\.\d+\.\d+\.\d+|[\w-]+\.local)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-# Startup event
-@app.on_event("startup")
-async def startup_event():
-    """Initialize database on startup."""
-    print("🚀 Starting Ski Analysis API...")
-    print("📦 Creating database tables...")
-    create_tables()
-    print("✅ Database initialized")
+app.include_router(validations_router)
 
 
 # Health check endpoint
@@ -67,7 +71,7 @@ async def health_check():
         content={
             "status": "healthy",
             "service": "ski-analysis-api",
-            "version": "0.1.0"
+            "version": "0.2.0"
         }
     )
 
@@ -86,6 +90,8 @@ async def api_root():
                 "upload": "/api/v1/videos/upload",
                 "analysis": "/api/v1/analysis/{video_id}",
                 "skeleton": "/api/v1/analysis/{video_id}/skeleton",
+                "assessment_catalog": "/api/v1/assessment/catalog",
+                "validations": "/api/v1/validations",
             }
         }
     )
@@ -161,10 +167,12 @@ async def get_video(video_id: str, db: Session = Depends(get_db)):
 @app.post("/api/v1/videos/upload", response_model=UploadResponse, status_code=status.HTTP_201_CREATED)
 async def upload_video(
     file: UploadFile = File(...),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
     Upload photo or video for analysis.
+    The record is stored under the caller named by the X-User-Id header (default "anonymous").
     V1: Focused on photo analysis (JPG, PNG)
     Future: Video support (MP4, AVI, MOV, MKV)
 
@@ -221,24 +229,8 @@ async def upload_video(
             content_type=file.content_type or "video/mp4"
         )
 
-        # Create database entry (temporary user for now)
-        # TODO: Add authentication and use actual user_id
-        temp_user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
-
-        # Check if temp user exists, create if not
-        temp_user = db.query(User).filter(User.id == temp_user_id).first()
-        if not temp_user:
-            temp_user = User(
-                id=temp_user_id,
-                email="temp@example.com",
-                username="temp_user",
-                hashed_password="temp"  # Not a real password
-            )
-            db.add(temp_user)
-            db.commit()
-
         video = Video(
-            user_id=temp_user_id,
+            user_id=user.id,
             filename=object_name,
             original_filename=file.filename,
             file_size=file_size,
@@ -431,15 +423,12 @@ async def get_skeleton_overlay(video_id: str, db: Session = Depends(get_db)):
         )
 
     try:
-        # Fetch original image from storage
-        response = requests.get(video.storage_url)
-        if response.status_code != 200:
+        image_bytes = storage_service.read(video.filename)
+        if image_bytes is None:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to fetch original image"
             )
-
-        image_bytes = response.content
 
         # Draw landmarks on image
         overlaid_image_bytes = pose_detector.draw_landmarks(
@@ -463,11 +452,8 @@ async def get_skeleton_overlay(video_id: str, db: Session = Depends(get_db)):
             }
         )
 
-    except requests.RequestException as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch image: {str(e)}"
-        )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -513,11 +499,13 @@ async def reprocess_video(video_id: str, db: Session = Depends(get_db)):
     )
 
 
+# Serve the built frontend (frontend/dist) from the API port when it exists: one URL for the LAN.
+_dist = os.path.join(os.path.dirname(config.BACKEND_DIR), "frontend", "dist")
+if os.path.isdir(_dist):
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/", StaticFiles(directory=_dist, html=True), name="frontend")
+
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=8003,
-        reload=True
-    )
+    uvicorn.run("main:app", host=config.HOST, port=config.PORT, reload=os.getenv("API_RELOAD", "false").lower() == "true")

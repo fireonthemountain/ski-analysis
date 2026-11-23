@@ -1,7 +1,7 @@
 """
 Pydantic schemas for request/response validation.
 """
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from uuid import UUID
@@ -9,7 +9,7 @@ from uuid import UUID
 
 # User Schemas
 class UserBase(BaseModel):
-    email: EmailStr
+    email: str
     username: str = Field(..., min_length=3, max_length=50)
     skill_level: Optional[str] = "intermediate"
 

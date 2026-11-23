@@ -2,7 +2,7 @@
 Database package initialization.
 """
 from .connection import Base, engine, get_db, SessionLocal
-from .models import User, Video, Analysis, Progress, SkillLevel, ProcessingStatus
+from .models import User, Video, Analysis, Progress, ValidationRun, SkillLevel, ProcessingStatus
 
 
 def create_tables():
@@ -24,6 +24,7 @@ __all__ = [
     "Video",
     "Analysis",
     "Progress",
+    "ValidationRun",
     "SkillLevel",
     "ProcessingStatus",
     "create_tables",

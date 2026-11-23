@@ -1,96 +1,52 @@
-import { useState } from 'react'
-import VideoUpload from './components/VideoUpload'
-import AnalysisResults from './components/AnalysisResults'
-import './App.css'
+import { useEffect, useState } from 'react'
+import type { Catalog } from './types'
+import { fetchCatalog, getUser, setUser } from './api'
+import { AssessmentForm } from './components/AssessmentForm'
+import { ResultsView } from './components/ResultsView'
+import { History } from './components/History'
 
-function App() {
-  const [uploadedVideoId, setUploadedVideoId] = useState<string | null>(null)
-  const [showResults, setShowResults] = useState(false)
+type Page = { name: 'new' } | { name: 'history' } | { name: 'run'; id: string }
 
-  const handleUploadSuccess = (videoId: string) => {
-    console.log('Video/Photo uploaded successfully:', videoId)
-    setUploadedVideoId(videoId)
-    // Show results immediately for photos
-    setTimeout(() => setShowResults(true), 1000)
-  }
-
-  const handleBackToUpload = () => {
-    setUploadedVideoId(null)
-    setShowResults(false)
-  }
-
-  const handleUploadError = (error: string) => {
-    console.error('Upload error:', error)
-  }
-
-  return (
-    <>
-      <div className="container">
-        <header>
-          <h1>🎿 Ski Technique Analysis</h1>
-          <p className="subtitle">Analyze and improve your skiing technique with AI</p>
-        </header>
-
-        <main>
-          {!uploadedVideoId ? (
-            <>
-              <section className="hero">
-                <h2>Upload Your Skiing Photo</h2>
-                <p>Get instant AI-powered feedback on your technique and form</p>
-              </section>
-
-              <VideoUpload
-                onUploadSuccess={handleUploadSuccess}
-                onUploadError={handleUploadError}
-              />
-
-              <section className="features">
-                <div className="feature-card">
-                  <h3>📸 Instant Analysis</h3>
-                  <p>Upload a photo and get immediate technique feedback</p>
-                </div>
-
-                <div className="feature-card">
-                  <h3>🤖 AI Insights</h3>
-                  <p>Advanced pose detection and biomechanical evaluation</p>
-                </div>
-
-                <div className="feature-card">
-                  <h3>💡 Coaching Tips</h3>
-                  <p>Personalized recommendations to improve your skiing</p>
-                </div>
-              </section>
-            </>
-          ) : showResults ? (
-            <AnalysisResults
-              videoId={uploadedVideoId}
-              onBack={handleBackToUpload}
-            />
-          ) : (
-            <section className="processing">
-              <div className="processing-card">
-                <div className="processing-icon">⚙️</div>
-                <h2>Analyzing Your Photo</h2>
-                <p className="processing-message">
-                  Detecting pose and analyzing technique...
-                </p>
-                <div className="processing-spinner"></div>
-                <p className="video-id">ID: {uploadedVideoId}</p>
-              </div>
-            </section>
-          )}
-
-          <section className="status">
-            <p className="status-badge">✅ Photo analysis is live! Upload a skiing photo to try it.</p>
-          </section>
-        </main>
-
-        <footer>
-          <p>Built with ⛷️ by skiers, for skiers</p>
-        </footer>
-      </div>
-    </>
-  )
+function pageFromHash(): Page {
+  const h = window.location.hash.replace(/^#\/?/, '')
+  if (h.startsWith('run/')) return { name: 'run', id: h.slice(4) }
+  return h === 'history' ? { name: 'history' } : { name: 'new' }
 }
 
-export default App
+export default function App() {
+  const [page, setPage] = useState<Page>(pageFromHash)
+  const [catalog, setCatalog] = useState<Catalog | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [user, setU] = useState(getUser())
+
+  useEffect(() => { fetchCatalog().then(setCatalog).catch(e => setError(`Cannot reach the API (${e.message}). Start the backend: scripts/run_dev.sh`)) }, [])
+  useEffect(() => {
+    const on = () => setPage(pageFromHash())
+    window.addEventListener('hashchange', on)
+    return () => window.removeEventListener('hashchange', on)
+  }, [])
+  const go = (p: Page) => { window.location.hash = p.name === 'run' ? `/run/${p.id}` : `/${p.name}` }
+
+  return (
+    <div className="app">
+      <header className="topbar">
+        <div>
+          <h1>Ski assessment validation</h1>
+          <div className="sub">Rate what you saw. The video or screenshots are measured, and each rating comes back as agrees, disagrees or inconclusive.</div>
+        </div>
+        <nav className="tabs">
+          <button className={`tab ${page.name === 'new' ? 'on' : ''}`} onClick={() => go({ name: 'new' })}>New validation</button>
+          <button className={`tab ${page.name === 'history' ? 'on' : ''}`} onClick={() => go({ name: 'history' })}>History</button>
+        </nav>
+        <label className="user" title="Sent as the X-User-Id header; runs are listed per user. Not a login.">
+          User <input type="text" value={user} onChange={e => setU(e.target.value)}
+            onBlur={() => { const u = user.trim() || 'anonymous'; setU(u); setUser(u) }} />
+        </label>
+      </header>
+      {error && <div className="notice err">{error}</div>}
+      {page.name === 'new' && catalog && <AssessmentForm catalog={catalog} onSubmitted={id => go({ name: 'run', id })} />}
+      {page.name === 'history' && <History key={user} onOpen={id => go({ name: 'run', id })} />}
+      {page.name === 'run' && <ResultsView key={page.id} id={page.id} onBack={() => go({ name: 'new' })} />}
+    </div>
+  )
+}

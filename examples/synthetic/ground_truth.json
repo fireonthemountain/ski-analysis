@@ -1,0 +1,9 @@
+{
+ "edge_angle": "moderate (30 deg peak)",
+ "angulation": "moderate (14 deg at apex)",
+ "stance_width": "functional (1.1x)",
+ "turn_shape": "round",
+ "turn_symmetry": "symmetric",
+ "pole_plant": "on_time",
+ "turns": 8
+}

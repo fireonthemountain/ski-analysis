@@ -1,176 +1,93 @@
-"""
-Storage service for handling video uploads to MinIO/S3.
+"""Storage for legacy single-photo uploads: local folder (default), MinIO or S3.
+
+The client libraries for MinIO/S3 are imported only when that backend is
+selected, and nothing connects at import time, so the API starts with no
+services running.
 """
 import os
 import uuid
 from typing import BinaryIO, Optional
-from minio import Minio
-from minio.error import S3Error
-import boto3
-from botocore.exceptions import ClientError
-from dotenv import load_dotenv
 
-load_dotenv()
+from config import DATA_DIR, STORAGE_TYPE
 
 
 class StorageService:
-    """Service for managing video file storage."""
-
     def __init__(self):
-        """Initialize storage service based on configuration."""
-        self.storage_type = os.getenv("STORAGE_TYPE", "minio")  # minio or s3
+        self.storage_type = STORAGE_TYPE
         self.bucket_name = os.getenv("MINIO_BUCKET_NAME", "ski-videos")
+        self.local_root = os.path.join(DATA_DIR, "uploads")
+        self._client = None
 
+    @property
+    def client(self):
+        if self._client is None:
+            if self.storage_type == "minio":
+                from minio import Minio
+                self._client = Minio(
+                    os.getenv("MINIO_ENDPOINT", "localhost:9000"),
+                    access_key=os.environ["MINIO_ACCESS_KEY"],
+                    secret_key=os.environ["MINIO_SECRET_KEY"],
+                    secure=os.getenv("MINIO_USE_SSL", "false").lower() == "true",
+                )
+                if not self._client.bucket_exists(self.bucket_name):
+                    self._client.make_bucket(self.bucket_name)
+            elif self.storage_type == "s3":
+                import boto3
+                self._client = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"))
+        return self._client
+
+    def upload_video(self, file: BinaryIO, filename: str, content_type: str = "video/mp4") -> tuple[str, str]:
+        """Store a file. Returns (object_name, storage_url)."""
+        object_name = f"videos/{uuid.uuid4()}{os.path.splitext(filename)[1].lower()}"
+        file.seek(0)
+        if self.storage_type == "local":
+            path = os.path.join(self.local_root, object_name)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "wb") as out:
+                while chunk := file.read(1024 * 1024):
+                    out.write(chunk)
+            return object_name, f"local://{object_name}"
         if self.storage_type == "minio":
-            self._init_minio()
-        else:
-            self._init_s3()
+            file.seek(0, 2)
+            size = file.tell()
+            file.seek(0)
+            self.client.put_object(self.bucket_name, object_name, file, size, content_type=content_type)
+            return object_name, f"http://{os.getenv('MINIO_ENDPOINT', 'localhost:9000')}/{self.bucket_name}/{object_name}"
+        self.client.upload_fileobj(file, self.bucket_name, object_name, ExtraArgs={"ContentType": content_type})
+        return object_name, f"https://{self.bucket_name}.s3.amazonaws.com/{object_name}"
 
-    def _init_minio(self):
-        """Initialize MinIO client."""
-        endpoint = os.getenv("MINIO_ENDPOINT", "localhost:9000")
-        access_key = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
-        secret_key = os.getenv("MINIO_SECRET_KEY", "minioadmin123")
-        use_ssl = os.getenv("MINIO_USE_SSL", "false").lower() == "true"
-
-        self.client = Minio(
-            endpoint,
-            access_key=access_key,
-            secret_key=secret_key,
-            secure=use_ssl
-        )
-
-        # Create bucket if it doesn't exist
+    def read(self, object_name: str) -> Optional[bytes]:
+        """Fetch a stored object's bytes (None when missing)."""
         try:
-            if not self.client.bucket_exists(self.bucket_name):
-                self.client.make_bucket(self.bucket_name)
-                print(f"Created bucket: {self.bucket_name}")
-        except S3Error as e:
-            print(f"Error creating bucket: {e}")
-
-    def _init_s3(self):
-        """Initialize AWS S3 client."""
-        self.client = boto3.client(
-            's3',
-            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-            region_name=os.getenv("AWS_REGION", "us-east-1")
-        )
-
-    def upload_video(
-        self,
-        file: BinaryIO,
-        filename: str,
-        content_type: str = "video/mp4"
-    ) -> tuple[str, str]:
-        """
-        Upload video file to storage.
-
-        Args:
-            file: File object to upload
-            filename: Original filename
-            content_type: MIME type of the file
-
-        Returns:
-            Tuple of (object_name, storage_url)
-        """
-        # Generate unique filename
-        file_extension = os.path.splitext(filename)[1]
-        object_name = f"videos/{uuid.uuid4()}{file_extension}"
-
-        try:
+            if self.storage_type == "local":
+                with open(os.path.join(self.local_root, object_name), "rb") as fh:
+                    return fh.read()
             if self.storage_type == "minio":
-                # Get file size
-                file.seek(0, 2)  # Seek to end
-                file_size = file.tell()
-                file.seek(0)  # Seek back to start
-
-                self.client.put_object(
-                    self.bucket_name,
-                    object_name,
-                    file,
-                    file_size,
-                    content_type=content_type
-                )
-
-                # Generate URL
-                storage_url = f"http://{os.getenv('MINIO_ENDPOINT')}/{self.bucket_name}/{object_name}"
-
-            else:  # S3
-                self.client.upload_fileobj(
-                    file,
-                    self.bucket_name,
-                    object_name,
-                    ExtraArgs={'ContentType': content_type}
-                )
-
-                storage_url = f"https://{self.bucket_name}.s3.amazonaws.com/{object_name}"
-
-            return object_name, storage_url
-
-        except (S3Error, ClientError) as e:
-            raise Exception(f"Failed to upload video: {str(e)}")
-
-    def delete_video(self, object_name: str) -> bool:
-        """
-        Delete video from storage.
-
-        Args:
-            object_name: Name of object to delete
-
-        Returns:
-            True if successful
-        """
-        try:
-            if self.storage_type == "minio":
-                self.client.remove_object(self.bucket_name, object_name)
-            else:
-                self.client.delete_object(
-                    Bucket=self.bucket_name,
-                    Key=object_name
-                )
-            return True
-        except (S3Error, ClientError) as e:
-            print(f"Error deleting video: {e}")
-            return False
-
-    def get_presigned_url(
-        self,
-        object_name: str,
-        expiry: int = 3600
-    ) -> Optional[str]:
-        """
-        Generate presigned URL for temporary access.
-
-        Args:
-            object_name: Name of object
-            expiry: URL expiry time in seconds (default 1 hour)
-
-        Returns:
-            Presigned URL or None if error
-        """
-        try:
-            if self.storage_type == "minio":
-                from datetime import timedelta
-                url = self.client.presigned_get_object(
-                    self.bucket_name,
-                    object_name,
-                    expires=timedelta(seconds=expiry)
-                )
-            else:
-                url = self.client.generate_presigned_url(
-                    'get_object',
-                    Params={
-                        'Bucket': self.bucket_name,
-                        'Key': object_name
-                    },
-                    ExpiresIn=expiry
-                )
-            return url
-        except (S3Error, ClientError) as e:
-            print(f"Error generating presigned URL: {e}")
+                resp = self.client.get_object(self.bucket_name, object_name)
+                try:
+                    return resp.read()
+                finally:
+                    resp.close()
+                    resp.release_conn()
+            return self.client.get_object(Bucket=self.bucket_name, Key=object_name)["Body"].read()
+        except Exception as e:  # noqa: BLE001 - any backend error means "not available"
+            print(f"Storage read failed for {object_name}: {e}")
             return None
 
+    def delete_video(self, object_name: str) -> bool:
+        try:
+            if self.storage_type == "local":
+                path = os.path.join(self.local_root, object_name)
+                if os.path.exists(path):
+                    os.remove(path)
+            elif self.storage_type == "minio":
+                self.client.remove_object(self.bucket_name, object_name)
+            else:
+                self.client.delete_object(Bucket=self.bucket_name, Key=object_name)
+            return True
+        except Exception as e:  # noqa: BLE001
+            print(f"Error deleting {object_name}: {e}")
+            return False
 
-# Singleton instance
+
 storage_service = StorageService()
