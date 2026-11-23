@@ -133,6 +133,9 @@ No footage handy: `POSE_ESTIMATOR=marker scripts/run_dev.sh` and upload `example
   inline fallback (compose refuses to start without `.env`) and the placeholder values changed, rather than keeping the
   old defaults. The old placeholder values remain in git history and in `RECREATION_PROMPT.md`.
 - `ski-analysis-1` (open-source checklist) not started; still open.
+- `ski-analysis-4` November 22, 2026: the unattended run was blocked; an interactive run the same day did checks 1–3 on a
+  public instructor clip (convention confirmed, signs confirmed, counter-aggregation flaw found). Check 4 (band
+  calibration) still needs csather's own rated clips. See §9.
 - New: `ski-analysis-4` (high) first real-footage validation + threshold calibration; `ski-analysis-5` refresh the stale
   docs (lower half of README, TESTING.md, QUICKSTART_TESTING.md, docs/architecture.md, RECREATION_PROMPT.md, legacy scripts);
   `ski-analysis-6` pipeline follow-ups (skier picker/trim, persistent queue, side-view turn segmentation, slope
@@ -160,3 +163,357 @@ Nothing was pushed, merged or deployed.
   itself has only been shown to load, run, and return "no skier" on that figure. Thresholds are uncalibrated defaults.
 - **Not done:** `ski-analysis-1` (open-source checklist); refresh of the older docs; full `docker compose up` run.
 - **Next step for csather:** run one front-on clip of his own through it and look at the overlay (`ski-analysis-4`).
+
+## 9. `ski-analysis-4` — first real-footage validation (November 22, 2026): checks 1–3 run on a public stand-in clip
+
+**Status: checks 1–3 done on public instructor footage; check 4 (band calibration) still needs your own rated clips.**
+Results are in "Results: stand-in clip run" below. Short version: the world-landmark convention is confirmed
+(x right, y down, z away). Separation and turn-direction signs are confirmed against the skier's actual path. Speed
+is about 0.1 s per frame. Detection is reliable once the skier is at least 15% of frame height. Two problems
+surfaced: the `counter` item read about 0 for countered skiers because it took the median over the whole turn; and
+Homebrew's ffmpeg on this Mac was broken. **Both are repaired (§10)**, along with 3D sanity gates and evidence-frame
+choice. Thresholds are unchanged.
+
+History: an unattended run earlier on November 22 was blocked
+(below) and added `scripts/validate_shots.sh` and git-ignored files under `videos/`, all untested. An interactive
+session the same evening ran the checks.
+
+### Why the first (unattended) attempt was blocked
+
+| Blocker | Evidence |
+|---|---|
+| No footage of csather in the project | Searched the whole repo, git-ignored folders included, for mp4/mov/m4v/avi/mkv/webm/jpg/jpeg/png/heic: only `examples/synthetic/` (the stick figure). `backend/data/` is empty, so nothing has been uploaded through the UI either. Per the task rules I did not download footage of real people and did not look outside the project folder. |
+| The unattended session could not run the backend Python | Every venv Python call needed interactive permission approval, which an unattended run cannot give: `./venv/bin/python -m pipeline.cli --list-items`, `./venv/bin/python -m pytest --version`, and a plain `-c "import mediapipe"` were all refused. So no MediaPipe run, no speed measurement, and the test suite was **not** re-run (the 116-passed figure in §4 is from November 15). |
+
+To unblock: put clips in `videos/` (step 0 below) and either follow the runbook yourself or run the task in an
+interactive session where the venv Python can be approved.
+
+### What I could establish without running anything
+
+**(a) The world-landmark axis convention is not documented locally.** The installed MediaPipe 0.10.35 says only
+"z: The z coordinate" (`venv/.../mediapipe/tasks/python/components/containers/landmark.py`). MediaPipe's online guide gives
+a direction only for the *normalised* z (smaller = closer to the camera) and describes world landmarks as metres from
+the hip midpoint without stating axis directions. The x right / y down / z away assumption in `axis_yaw`
+(`backend/pipeline/metrics.py:82`) is therefore still unverified, as §4 said.
+
+**(b) A wrong convention is loud, so any front-on clip with the boots visible tests it — not only an obvious-counter
+clip.** Working through `axis_yaw` and `forward_yaw`: if MediaPipe's world frame had the other handedness (z toward the
+camera, or x mirrored), the shoulder/hip headings (from left→right vectors) and the feet heading (heel→toe) would come
+out about **180° apart in every camera view**. What that looks like:
+- *Feet visible (the normal case):* `separation` reads roughly 130–180°, rated "strong" and far beyond anything a skier
+  does; the separation chart sits near ±180°. With the right convention real values should be well under 90°.
+- *Feet not visible* (the item's notes say "Feet not confidently visible ... against the pelvis"): `separation` and
+  `counter` just change sign, with nothing to flag it. A countered skier would read "rotated".
+
+Handedness belongs to the model, not the clip, so one front-on clip with boots visible and separation < 90° confirms
+the convention for both paths. The obvious-counter clip is still worth filming, but what it tests is different:
+whether MediaPipe's depth estimate is good enough to get the *sign* of real counter right.
+
+**(c) Front/back label confusion does not change counter.** If MediaPipe mistakes a back-view skier for a front-facing
+one and swaps left/right (plausible with helmet and goggles), the turn direction (from `facing`) and the separation sign
+flip together, so `counter` is unchanged, and the separation item uses |separation|. Do the convention check on a clip
+where you ski **toward** the camera (face visible, labels most reliable). Near-180° separation on only *some* frames of
+a back-view clip is label swapping, not the convention.
+
+**(d) Speed and detection rate go together.** Per frame, `pose.py` runs the heavy model on a crop around the last skier
+box; if that misses, on the full frame; and once the skier has been lost for 8 frames, on the full frame **plus 9
+half-frame tiles** — up to 10 model passes per frame (`backend/pipeline/pose.py:106-120`). A skier who is too small in
+frame therefore makes a run both slow and low-detection; the fix is filming tighter or cropping, not a faster model.
+Knobs: `POSE_MODEL=full` or `POSE_MODEL=lite` (both already in `backend/models/`) and `--fps 10`.
+
+**(e) Bands most likely to need tuning — hypotheses to check, nothing changed:**
+- `stance_height` (120/155°) and `hip_flexion` (105/150°) use the 3D estimate. Seen front-on, most knee and hip bend is
+  along the depth axis, the poorly estimated one, so these may read straighter than reality ("tall"/"upright"
+  over-reported). If your clips show that, raise the bounds.
+- `stance_width` (0.75/1.5×) divides by the distance between MediaPipe's hip *joint* landmarks, which is narrower than
+  the hips you see; a stance that looks "hip width" may measure 1.2–1.5× and tip into "wide".
+- `fore_aft` (−4/12°): the centred band is about as narrow as the pose noise (§4); expect "inconclusive" rather than wrong.
+
+### Runbook (when you have clips)
+
+**0. Footage.** Put clips and screenshots in `videos/` at the project root: that folder is git-ignored as a whole.
+Elsewhere only `.mp4/.mov/.avi/.mkv` are ignored, so `.m4v`, `.webm`, `.jpg`, `.png` and `.heic` would show up in
+`git status`. Minimum set — you, full body with boots visible, at your usual filming distance, 3+ turns each:
+- **A** front-on, skiing toward the camera, normal skiing (checks 1, 2, 3a, 4)
+- **B** same, deliberately exaggerated counter: upper body facing down the hill / to the outside of each turn (check 3b)
+- **C** (optional) same, deliberately rotating the shoulders into each turn (the opposite sign)
+- **D** (optional) side-on, for fore-aft
+
+**1. Environment check**
+```
+cd backend                                   # from the repo root
+./venv/bin/python -m pytest tests -q          # expect 116 passed
+./venv/bin/python -m pipeline.cli --list-items
+```
+
+**2. Rate clip A blind, then run it.** Copy `examples/assessment.example.json` to `videos/clipA.json` and, *before*
+looking at any output, set every rating to what you see. Add `fore_aft` and `hip_flexion` (the example leaves them out)
+so all 12 items get measured. Then:
+```
+./venv/bin/python -m pipeline.cli --assessment ../videos/clipA.json ../videos/clipA.mov --out ../videos/out-clipA
+```
+Keep `--out` under `videos/`: the CLI default (`backend/validation-output/`) is not git-ignored and holds frames of you.
+
+Summary of the numbers checks 1–3 need (stdlib only, so system `python3` is fine; written but not run here):
+```
+python3 - ../videos/out-clipA/result.json <<'EOF'
+import json, sys
+r = json.load(open(sys.argv[1])); p = r["pose"]
+print(f"{p['frames']} frames, {p['frames_detected']} detected ({p['frames_detected']/p['frames']:.0%}), "
+      f"{p['frames_confident']} confident ({p['frames_confident']/p['frames']:.0%}), 3D={p['has_3d']}")
+print(f"{r['processing_seconds']/p['frames']:.2f} s/frame, {r['processing_seconds']:.0f} s total, view={r['view']}")
+for x in r["results"]:
+    if x["item_id"] in ("separation", "counter"):
+        m = x["measured"] or {}
+        print(x["label"], m.get("value"), "+/-", m.get("uncertainty"), "|", x["verdict"], "|", "; ".join(x["notes"]) or "-")
+EOF
+```
+
+**3. Check 1 — overlay and detection.** Play `videos/out-clipA/annotated.mp4`: the skeleton should sit on you (not on
+another skier or a lift tower), with the ankle/heel/toe points on the boots. My acceptance assumption: ≥ 80% of frames
+detected and no WARNING line from the CLI (it warns below 50% detected or 60% confident). If it fails, zoom or crop so
+you fill more of the frame and re-run.
+
+**4. Check 2 — speed.** Read s/frame from the summary. It is an upper bound (it includes decode, JPEG writes,
+annotation and video encoding). My assumption for "acceptable": a 30 s clip finishes in under 5 minutes. If slower,
+look at the detection rate first (see (d)), then try `POSE_MODEL=full`.
+
+**5. Check 3a — axis convention (clip A).** Look at the separation line of the summary:
+- notes say "Feet not confidently visible" → this clip cannot test it; use one with boots visible
+- value < ~60° → convention OK
+- value > 90° → convention wrong. Stop and do not trust separation or counter. The fix is a sign change on one world
+  axis where `world` is built (`backend/pipeline/pose.py:93`); which axis needs a look at the raw world landmarks, so
+  bring the clip to an interactive session.
+
+**6. Check 3b — counter sign (clip B, and C if filmed).** Run B the same way. Counter should be positive, ideally above
++10° ("countered"); C should be negative.
+- B clearly negative while 3a passed → the 2D turn-direction side (`facing`/`lean_skier` on real left/right labels) is
+  wrong, not the 3D convention
+- B near 0 → depth is too weak to see counter; keep the item low-trust (it is already capped at confidence 0.6)
+
+**7. Check 4 — calibrate the bands.** For each clip, write one row per item: item | clip | your rating | measured ±
+uncertainty | band it fell in. Move a bound (`bounds=` in `backend/pipeline/assessment.py`) only when at least 2 clips
+disagree in the same direction **and** the measured value sits outside your band by more than its ± uncertainty. Put
+the new edge midway between the measured values you rated on either side. Every middle band must stay wider than
+2 × `base_uncertainty` (`test_catalog_is_consistent`, `backend/tests/test_validation.py:23`, fails otherwise). Re-run
+`pytest`, and record the before/after bounds and the clips behind them in this file.
+
+### Public stand-in clip (added November 22, 2026, after csather sent a link)
+
+csather sent a YouTube link: **Nordica, "Pro Series Level 2: How to Pass Your Level 2 Ski Instructor Certification
+Exam"** (`Tmlx2mtBIWU`, 15:40). It shows demo skiing by PSIA-AASI National Team members and a Pacific Northwest
+examiner. I took the link as the go-ahead to use this published footage as a stand-in, setting aside the "no footage of
+real people" rule for this one clip. It is Nordica's video, so it is local test material only: it lives in git-ignored
+`videos/` and should not be committed or redistributed.
+
+The unattended session **could not run it**: `yt-dlp`, `ffmpeg` and the venv Python all needed approval. (It was run
+later that day in an interactive session; see "Results: stand-in clip run" below. That run cut its own clips and did
+not use `run.sh`/`validate_shots.sh`, which are still untested.) What `curl`
+(allowed) did get: the chapter list from the public description, and YouTube's storyboard previews (one frame per 10 s,
+saved in `videos/yt-Tmlx2mtBIWU-thumbs/`), which show the camera angles.
+
+| Chapter | What the previews show | Use |
+|---|---|---|
+| Short Radius Turns 12:53–14:31 | Mostly front-on, skiers coming toward the camera. Often two skiers in follow formation, often small and distant in flat light, falling snow. One close single-skier shot around 14:30. | Checks 1, 2, 3a, 3b. Task definition: "turn legs separately from the upper body through the entire turn", so counter should be clearly positive. |
+| Railroad Tracks 14:31–14:45 | Two skiers side by side, front-on, close | Contrast case: pure edging, so counter should be near 0 and separation small |
+| Hockey Stops 0:42–1:14 | One distant and one close hockey-stop shot, plus talk | Legs turned across the hill under a downhill-facing upper body: separation should be the largest of the three |
+| Funnel Turn 10:50–12:53 | Mostly a tiny, distant skier; text overlays | Skipped |
+
+**What it can and can't tell us**
+- *Can:* check 1 at YouTube distances and with two skiers in frame (does the tracker stay on one?); check 2; check 3a
+  (front-on, skiing toward the camera, boots visible); check 3b against an expert reference (short-radius counter
+  clearly positive, railroad tracks near 0).
+- *Can't:* check 4. The ratings in the assessment files come from the PSIA task definitions, not from your eye. The
+  measured values are a first look at where expert demos land on each scale, not a calibration.
+- *Footage caveats:* the video is cut every few seconds (hence the shot splitting), so each shot holds only 1–4 turns
+  and turn-based items will often be inconclusive. Two skiers in one frame can make the tracker switch skier. Any
+  slow-motion segments would distort the timing items (turn shape, pole plant) but not the angles. YouTube compression
+  costs some detail.
+
+**How to run (one command; written but not run here)**
+```
+cd <repo root>
+videos/nordica-l2/run.sh            # all three chapters; or: run.sh short | railroad | hockey
+```
+- `run.sh` downloads the clip once (1080p H.264, no audio) into `videos/yt-Tmlx2mtBIWU/source.mp4`, then calls
+  `scripts/validate_shots.sh` for each chapter.
+- `scripts/validate_shots.sh VIDEO START END ASSESSMENT.json OUTDIR` is new and generic, so it works on your own edited
+  clips too. It cuts the section out, splits it at camera cuts (ffmpeg scene detection), runs `pipeline.cli` on every
+  shot of at least 3 s, and writes `OUTDIR/summary.md` with one row per shot (source time, frames, detected %,
+  confident %, s/frame, view, turns, and each item's measured value and verdict).
+- Assessment files: `videos/nordica-l2/{short_radius,railroad_tracks,hockey_stops}.json`. Every item is rated so that
+  every item gets measured. Ratings marked `expected` follow the task definition; `placeholder` ratings only exist to get
+  a measurement, so ignore their verdicts.
+
+**Reading the result** (`videos/nordica-l2/out-*/summary.md`; skip talk-to-camera rows)
+
+| Check | Look at | Pass |
+|---|---|---|
+| 1 | each `shot_NN/annotated.mp4`; detected / confident columns | skeleton on one demo skier for the whole shot (no jumping to the second skier); ≥ 80% detected where the skier is reasonably large |
+| 2 | s/frame | record it; slow *and* low detection together means the skier is too small (see (d)) |
+| 3a | separation on front-on shots | well below 90° everywhere; 130–180° means the axis convention is wrong (step 5 above) |
+| 3b | counter | short radius clearly positive (above +10°); railroad tracks within ±10°; short radius above railroad tracks every time |
+| sanity | separation by chapter | hockey stops largest, railroad tracks smallest |
+
+A pass on 3a/3b here settles the convention question without your footage. Checks 1, 2 and 4 still need your own clips
+at your usual filming distance, rated by you.
+
+### Results: stand-in clip run (November 22, 2026, interactive session)
+
+**Setup.** The 1080p H.264 video stream (format 137, no audio) was downloaded to the session scratchpad, not the repo.
+Clips were cut with OpenCV at shot boundaries found by eye from contact sheets; ffmpeg could not be used (see
+"Environment" below). Each clip ran through `backend/venv/bin/python -m pipeline.cli --assessment X.json clip.mp4`
+(MediaPipe heavy, 15 fps analysis, Mac Mini). The assessment ratings were rough, non-expert placeholders, so the
+agree/disagree verdicts carry no weight. Only the measured values matter here.
+
+| Clip | Source time | What it is | Frames | Detected | Confident | s/frame | View |
+|---|---|---|---|---|---|---|---|
+| A | 11:58.6–12:23.4 (Funnel) | green skier, handheld panning camera, skis toward it from very far to close, ~12 turns | 298 | 53% | 49% | 0.095 | frontal |
+| A2 | 14:16.7–14:30.2 (Short Radius) | red/blue skier, static camera below, far to close, 10 turns | 162 | 98% | 96% | 0.103 | frontal |
+| B1 | 1:05.6–1:07.65 (Hockey Stops) | ground-level hockey stop, 2 s shot | 25 | 96% | 64% | 0.118 | oblique |
+| B2 | 1:01.35–1:03.1 (Hockey Stops) | green skier hockey stop, 1.75 s shot | 21 | 95% | 33% | 0.112 | oblique |
+
+Correction to the table above: the Funnel chapter is not "mostly a tiny, distant skier". 11:58.6–12:23.4 is one
+continuous handheld front-on shot, the closest match to how you would film yourself, and the best clip for check 1.
+
+**Check 1: overlay and detection.** In every evidence frame the skeleton sits on the demo skier, with ankle, heel and
+toe on the boots when the skier is close. Detection depends on the skier's size in the frame. From clip A, measuring
+the green suit (shoulders to boots, about 85% of full height) in every sampled frame:
+
+| Suit height, 1080p | Share of frame height | Detected | Confident |
+|---|---|---|---|
+| < 60 px | < 6% | 0% | 0% |
+| 60–90 px | 6–8% | 34% | 14% |
+| 90–120 px | 8–11% | 70% | 44% |
+| 120–160 px | 11–15% | 92% | 92% |
+| ≥ 160 px | ≥ 15% | 95–100% | 95–100% |
+
+**Rule: keep the skier at least about 15% of frame height** (about 160 px at 1080p, 110 px at 720p). Rough distance
+at that size, assuming a phone's 1× main camera (about 26 mm equivalent, landscape vertical field of view about 43°)
+and a skier about 1.5 m tall in stance: roughly 13 m at 1×, 26 m at 2×, 40 m at 3×. That is an estimate; check it
+against one of your own clips. Small skiers sometimes get a **collapsed** pose: left and right shoulders and hips
+land on top of each other. Those frames give impossible 3D values (separation −114°, stance
+width 3.6–6.6× hip width). The −114° frame was the one the separation item showed as its evidence. They are rare
+(1 of the 6 frames with a separation value in the 60–90 px bin), so the 90th-percentile separation value barely moved.
+A follow-up per-frame analysis (§10) found a size cutoff is the wrong gate: it would discard 232 good frames to catch 8
+bad ones. A 3D body-width check catches the collapse directly.
+
+**Check 2: speed.** 0.095–0.12 s per analysed frame, covering pose, metrics and evidence JPEGs, but not
+`annotated.mp4`, which was skipped (see "Environment"). At 15 fps that is about 1.5 s of compute per second of video.
+Clip A (24.8 s) took 31 s wall time including model load, about 6× inside the "30 s clip in under 5 minutes" target.
+Frames where the skier is lost (up to 10 model passes each) did not noticeably slow the average.
+
+**Check 3a: world-landmark axis convention: confirmed (x right, y down, z away from the camera).** Raw MediaPipe
+world landmarks were read on 14 frames where the person clearly faces the camera: presenters standing to camera,
+plus skiers coming straight at it.
+
+| Test (person facing camera) | Expected if the convention holds | Observed, 13 of 14 frames |
+|---|---|---|
+| nose z minus hip-centre z | negative (closer) | −0.16 to −0.58 m |
+| toe z minus heel z | negative (toes toward camera) | −0.02 to −0.11 |
+| world x (R shoulder − L shoulder) | same sign as image x | both negative |
+| nose y | negative (up) | −0.37 to −0.63 |
+
+The 14th frame (14:29.0) had every sign flipped at once: MediaPipe swapped left/right and read the skier as facing away.
+Separation still came out small (6°), which confirms prediction (c) above that a front/back label swap leaves counter
+alone. On the front-on clips, separation (90th percentile of |value|) was 33–35°, far below the 90° failure threshold.
+
+**Check 3b: separation and counter signs: correct. The counter *item* is not.** Two independent checks on the
+static-camera clip A2 compare against the skier's actual path in the image, so they don't depend on MediaPipe depth:
+
+| Check | Physical expectation | Result |
+|---|---|---|
+| separation vs hip image-x velocity | positive: with a steady upper body, separation ≈ −(ski heading); heading to the skier's right moves the skier image-left in a front view | r = +0.56, 77% sign agreement |
+| `lean_skier` vs hip image-x acceleration | negative: a right turn accelerates toward the skier's right, which is image-left | r = −0.90, 93% sign agreement |
+
+Separation swings ±20–40° once per turn and crosses zero near peak lean. That is the pattern of a stable,
+downhill-facing upper body with the skis turning under it. **But the item reports the median over every frame with at
+least 8° of lean, and that cancels out:**
+
+| Counter, median | Clip A | Clip A2 |
+|---|---|---|
+| before peak lean (initiation) | −14.8° | −18.4° |
+| after peak lean (shaping/finish) | **+12.2°** | **+11.3°** |
+| all frames (what the item reports) | −1.6° → "square" | −1.3° → "square" |
+
+Before the skis cross the fall line, a downhill-facing upper body faces the *inside* of the new turn; after, it faces
+the outside. So whole-turn averaging makes a textbook-countered skier read "square". This is a flaw in how the
+metric is defined, not a sign or depth problem. It contradicts step 6's reading of "B near 0" as "depth too weak".
+Fixed in §10: counter is now measured on the shaping/finish phase only (peak lean to the edge change). L2 demos now
+read +10.5° and +10.9°, right on the edge of "countered", so the ±10° band is the open calibration question.
+
+The hockey-stop shots were not usable: 1–2 s each, oblique, so `counter` is withheld by the view gate and separation
+lacks confident frames. The two short-radius clips served as the obvious-counter test instead.
+
+**Check 4: band calibration: not done.** It needs your ratings of your own clips. For reference only (expert demos,
+not calibration): stance height 129–144°, hip flexion 119–131°, stance width 0.98–1.22× hip width (the hypothesis in
+(e), that hip-width stances would read 1.2–1.5×, did not show), edge angle 41–50° peak, flexion/extension range 33–44°.
+
+**Environment.**
+- Homebrew ffmpeg 8.1.2 cannot start: `dyld: Library not loaded: /opt/homebrew/opt/x265/lib/libx265.216.dylib`
+  (x265 was upgraded underneath it). `shutil.which("ffmpeg")` still finds it, so:
+  - `report.encode_video` swallows the error and silently skips `annotated.mp4`.
+  - `synthetic.write_video` raises, so **3 e2e tests error** (113 passed + 3 errors). With Homebrew off PATH (OpenCV
+    fallback), **116 passed**. No code regression.
+  - `scripts/validate_shots.sh` would stop at its first ffmpeg call.
+  - Fixed in §10: `brew upgrade ffmpeg` to 9.0.2, and `ffmpeg_path()` now ignores a binary that won't start.
+
+### Follow-ups for `ski-analysis-6`
+- Automatic handedness self-check: per frame `wrap(forward_yaw(feet) − axis_yaw(hips))`; if its median magnitude is
+  above 90°, add a run warning and withhold separation/counter. That makes check 3a happen on every run.
+- Record pose-only time (`pose_seconds`) in `result.json` so speed can be measured without the rendering overhead.
+- ~~Separation evidence captioned "shoulders vs feet" even on the pelvis fallback~~: done in §10.
+- ~~Counter by turn phase; collapsed far-away poses; evidence by max |value|; `ffmpeg_path()` check~~: done in §10
+  (ledger `ski-analysis-8`).
+
+## 10. Repairs after the stand-in run (November 22, 2026; ledger `ski-analysis-8`)
+
+**Status: done; uncommitted.** Tests: **122 passed** (116 existing + 6 new) with the working ffmpeg 9.0.2.
+Thresholds/bands unchanged.
+
+| Change | Where | Why |
+|---|---|---|
+| Homebrew ffmpeg 8.1.2 → 9.0.2 (`brew upgrade ffmpeg`) | this Mac, not the repo | 8.1.2 linked a removed `libx265.216.dylib` and aborted at start-up |
+| `ffmpeg_path()` only returns an ffmpeg that actually starts (cached per resolved binary); `write_video` falls back to OpenCV if the encode fails | `pipeline/synthetic.py` | a broken install passed `shutil.which`, so the e2e tests errored and `annotated.mp4` was silently skipped |
+| Startup and script checks now say "installed but will not start" | `scripts/run_dev.sh`, `scripts/validate_shots.sh` | same failure, caught before a run |
+| **Counter scored on the second half of each turn only** (peak lean → edge change); video without segmented turns → unavailable with the reason; stills get a note | `pipeline/validation.py` `eval_counter`, `_finish_phase_mask`; measure text in `pipeline/assessment.py` | whole-turn median cancelled to ~0 (§9 check 3b) |
+| **3D sanity gates**: a frame whose 3D shoulders are < 0.20 m or hips < 0.10 m apart gets no 3D metrics (rotation, 3D stance, joint angles; no 2D fallback); separation beyond ±110° is dropped | `pipeline/metrics.py` `world_plausible`, `MIN_WORLD_SHOULDER_W`, `MIN_WORLD_HIP_W`, `MAX_SEPARATION_DEG`, `world_rejected` series | collapsed far-away poses and upper/lower label swaps gave impossible values |
+| `pose.frames_3d_rejected` in `result.json`; run warning when ≥ 10% of detected frames | `pipeline/runner.py` | make the gate visible |
+| Evidence frames = frame nearest the reported value; range ends at 5th/95th (stance etc.) or 10th/90th (flexion range) percentile; edge-angle turn evidence nearest the per-turn 95th percentile; separation caption says feet or pelvis | `pipeline/validation.py` | the max-\|value\| frame was the −114° collapse frame |
+| `RunSpec.stable_upper_body` (shoulders on the fall line, counter a quarter-turn out of phase with lean) | `pipeline/synthetic.py` | lets tests reproduce the real-skier pattern the old generator could not |
+| Counter row, 3D gates, known limits | `docs/PIPELINE.md` | docs match behaviour |
+
+**How the gates were chosen** (every frame of clips A and A2, 648 detected frames, tracking on):
+- 11 frames looked implausible. A pixel-size cutoff would have been the wrong tool: excluding skiers of 80–140 px
+  would discard 232 good frames to catch 8 bad ones, and 3 bad frames were close-ups.
+- 3D body width separates them directly. Plausible frames have shoulder-joint width at the 5th percentile 0.27 m
+  (median 0.33) and hip-joint width at the 5th percentile 0.15 m (median 0.20); collapsed frames measured
+  0.07–0.14 m. The 0.20/0.10 m gate rejects 22/648 frames (3.4%). Most of those had no separation value anyway or
+  were bogus 12–31 px detections.
+- The ±110° ceiling catches the one remaining label swap (−142°). The largest plausible separation was 69°.
+
+**New tests**: collapsed 3D body → no 3D metrics and no 2D joint-angle fallback; swapped feet labels → separation
+dropped, pelvis twist kept; stable-upper-body run → whole-turn median ≈ 0 but counter judged "countered" (and the
+mirror case "rotated"); video with no turns → counter unavailable; separation evidence is a typical frame even with
+an injected 95° outlier; a fake ffmpeg that aborts counts as missing and `write_video` still produces a file.
+
+**Re-run on the real clips**
+
+| | Clip A (funnel) | Clip A2 (short radius) |
+|---|---|---|
+| counter before → after | −2.1° → **+10.9°** (12 turns, 58 frames) | −1.3° → **+10.5°** (10 turns, 65 frames) |
+| counter verdict for "countered" | borderline (10.9 ± 9.0 vs the +10° edge; confidence 0.29) | borderline (10.5 ± 9.7; confidence 0.27) |
+| separation evidence frame | −114° collapse frame → typical +33° | typical +34° (pelvis fallback, now labelled) |
+| frames with 3D rejected | 12 / 158 detected | 9 / 158 detected |
+| `annotated.mp4` | written (4.7 MB) | written (3.7 MB) |
+
+**`scripts/validate_shots.sh` tested** on 13:40–14:31: 5 shots found, 1 dropped (< 3 s), 4 validated, `summary.md`
+written, 1 min 42 s total. Counter on the four short-radius shots: **+16, +16, +12, +11°**. That includes shot_02, a
+drone shot from behind ("USA" on the back), which was correctly labelled "away from camera", so the sign also holds
+in a back view. `videos/nordica-l2/run.sh` itself (its download step) was not run; the script it calls was.
+
+**Still open**
+- **Check 4 (bands).** L2 short-radius demos measure +10 to +16° counter with about ±9–10° uncertainty, against a
+  +10° "countered" edge. At that uncertainty counter only reaches a verdict when it is clearly beyond about ±20°.
+  Whether to move the edge (and to where) needs your ratings of your own clips.
+- Nothing is committed or pushed.
