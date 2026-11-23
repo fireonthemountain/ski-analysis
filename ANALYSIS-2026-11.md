@@ -517,3 +517,64 @@ in a back view. `videos/nordica-l2/run.sh` itself (its download step) was not ru
   +10° "countered" edge. At that uncertainty counter only reaches a verdict when it is clearly beyond about ±20°.
   Whether to move the edge (and to where) needs your ratings of your own clips.
 - Nothing is committed or pushed.
+
+## 11. Level 1 / 2 / 3 comparison (November 22, 2026)
+
+csather supplied two more Nordica Pro Series videos: **Level 1** (`iYcXVPlygBA`, 13:52) and **Level 3**
+(`QIyQ9F2aj4k`, 24:47). Together with the Level 2 video they give an instructor skill ladder. This is not
+calibration against your judgement, but it does test whether the measurements rank the levels sensibly. Same
+handling as before: local scratchpad only, nothing in the repo.
+
+**Method.** Each chapter went through `scripts/validate_shots.sh` with a generic all-12-items assessment (placeholder
+ratings, so verdicts are ignored). 60 shots in total. Kept: ≥ 2 turns, ≥ 60% detected, front/back view (25 shots).
+Two L3 chairlift shots were then removed by hand (see below). Values are medians across shots.
+
+| Chapter | Shots / turns | Edge | Angulation | Knee | Flex range | Separation | Counter | Turn shape | Stance |
+|---|---|---|---|---|---|---|---|---|---|
+| L1 wedge christy (4:16–5:34) | 2 / 6 | 33° | 6° | 136° | 34° | 34° | +21° | 0.50 | 1.81× |
+| L1 parallel, skidded (8:14–10:28) | 2 / 36 | 43° | 15° | 132° | 60°* | 35° | +14° | 0.29 | 1.10× |
+| L2 short radius (12:53–14:31) | 5 / 45 | 50° | 17° | 128° | 39° | 43° | +11° | 0.23 | 0.99× |
+| L3 pivot slip combo (7:45–11:43) | 3 / 86 | 36° | 12° | 129°* | 32° | 36° | +22° | 0.24 | 1.20× |
+| L3 short radius, ungroomed (11:43–13:24) | 2 / 31 | 40° | 12° | 129° | 42° | 38° | +5° | 0.25 | 0.99× |
+| L3 dynamic short (13:24–17:52) | 9 / 103 | 54° | 16° | 120° | 33° | 33° | +10° | 0.26 | 1.13× |
+
+\* contaminated: ffmpeg scene detection (threshold 0.30) missed cuts in flat light. One L1 "shot" spans 100 s of
+several shots and zoom levels, which inflates the flexion range. The first pivot-slip "shot" includes the presenter
+standing and talking (knee about 153°).
+
+No usable shots in L1 wedge turn, L1 medium-radius parallel or L2 funnel (distant skier, short shots, or fewer than 2 turns).
+
+**What ranks correctly**
+- **Edge angle** rises with level: 33 → 43 → 50 → 54°. The drills that should be low-edge read low: pivot slips 36°
+  ("low edge angles and rotation"), ungroomed 40° (the description lists "use low edge angles").
+- **Knee flexion** deepens with level: 136 → 132 → 128 → 120°.
+- **Stance width** reads "wide" (1.81×) only for the wedge christy, whose skis are in a V. The parallel drills read
+  0.99–1.20×.
+- **Turn shape**: the wedge christy reads most progressive (0.50); everything else 0.23–0.29 (round).
+- **Counter is positive in every chapter** (+5 to +22°), never negative, so the finish-phase fix holds across 23
+  shots, several different skiers, and front and back views. Pivot slips (upper body held down the hill while the skis pivot)
+  and wedge christies read highest. It does not rise with level, and it shouldn't be expected to: dynamic short
+  turns rely more on edging than on counter.
+
+**Hints for check 4 (bands). These come from expert footage, so they are not a calibration; confirm with your clips.**
+- **Edge angle, moderate/high edge at 40°:** L1 skidded parallel turns (the task asks for "skidding and not
+  carving") read 43°, which is "high". Moving the edge to about 45–48° would put skidded L1 turns in "moderate" and
+  keep L2/L3 dynamic turns (50–56°) in "high".
+- **Flexion/extension range, active ≥ 30°:** every chapter reads "active" (32–60°), even pivot slips, so the band
+  does not discriminate. Either the bound is too low, or the measurement picks up depth noise and distance changes.
+- **Separation, strong ≥ 35°:** every chapter sits at 33–43°, right on the boundary, so it does not discriminate
+  either.
+- **Angulation, strong ≥ 18°:** L3 dynamic short turns read 16° (moderate). Either the bound is high or the 2D
+  measurement under-reads; worth checking against your own eye.
+
+**New pipeline issues found**
+- **Non-skiing shots are analysed as skiing.** Two L3 shots are three people sitting on a chairlift. They produced
+  "turns", knee angles of 92–109° (seated) and counter −28°. Nothing checks that the subject is actually skiing
+  (e.g. the skier's movement through the frame, standing posture).
+- **The tracker switches between people:** in one chairlift shot the skeleton moves from rider to rider. This is the
+  case the planned skier picker (`ski-analysis-6` (a)) addresses.
+- **`validate_shots.sh` misses camera cuts in flat light** at its 0.30 scene threshold (merged 100–133 s "shots").
+  A lower threshold or a histogram-based cut detector would split them; worth adding a maximum shot length
+  warning.
+- MediaPipe's native library tries to upload usage telemetry to Google ("clearcut" log lines during runs); logged as
+  `ski-analysis-9`.
