@@ -26,6 +26,7 @@ Helpers
   view_ratio        2D shoulder (and scaled hip) width / torso length (frontal ~0.75, side ~0.1)
   facing            +1 back view (skier's right is image right), -1 front view
   wrist_drop_left/right  wrist below shoulder, in torso lengths (pole-plant proxy)
+  thigh_shin_2d     image length of hip->knee / knee->ankle (seated-and-facing-camera check)
   world_rejected    1 where the frame HAD 3D landmarks but they were implausible (see world_plausible)
 
 3D sanity checks (from the first real-footage run, ANALYSIS-2026-11.md section 9): a distant skier sometimes
@@ -60,6 +61,11 @@ MIN_WORLD_HIP_W = 0.10          # m
 # ~90). Larger values come from left/right labels swapped between upper and lower body (seen: -142, +150);
 # the largest plausible value on real footage was 69.
 MAX_SEPARATION_DEG = 110.0
+# Seated (chairlift) check. Facing the camera, a seated person's thighs point at the lens, so in the
+# image the thigh is much shorter than the shin. Real footage (60 shots, ANALYSIS-2026-11.md section 12):
+# chairlift shots 0.51-0.57, skiing 0.67-1.12 (deep L3 dynamic turns 0.67-0.74, wedge 0.78-0.80).
+SEATED_THIGH_SHIN = 0.62
+SEATED_MIN_FRAMES = 10
 
 # Rough segment-mass weights for a whole-body centre-of-mass proxy
 COM_WEIGHTS = {"hip": 0.45, "shoulder": 0.374, "knee": 0.112, "ankle": 0.064}
@@ -293,6 +299,16 @@ def frame_metrics(f: PoseFrame) -> dict[str, tuple[float, float]]:
                     width = abs(float(np.dot(W[K.R_ANKLE] - W[K.L_ANKLE], lat)))
                     out["stance_width_3d"] = (width / float(np.linalg.norm(pel)), min(both_ank, both_hip))
 
+    # --- seated check helper: 2D thigh vs shin length
+    legs = []
+    for h, k, a in ((K.L_HIP, K.L_KNEE, K.L_ANKLE), (K.R_HIP, K.R_KNEE, K.R_ANKLE)):
+        c = _minvis(vis, (h, k, a))
+        shin = float(np.linalg.norm(xy[a] - xy[k]))
+        if c >= VIS_OK and shin > 1.0:
+            legs.append((float(np.linalg.norm(xy[k] - xy[h])) / shin, c))
+    if legs:
+        out["thigh_shin_2d"] = (float(np.mean([l[0] for l in legs])), float(np.mean([l[1] for l in legs])))
+
     # --- pole-plant proxy
     if np.isfinite(torso_len) and torso_len > 0:
         for name, sh, wr in (("wrist_drop_left", K.L_SHOULDER, K.L_WRIST), ("wrist_drop_right", K.R_SHOULDER, K.R_WRIST)):
@@ -306,7 +322,7 @@ SERIES_NAMES = [
     "view_ratio", "facing", "inclination", "lean_skier", "torso_tilt", "angulation", "edge_proxy",
     "stance_width_2d", "stance_width_3d", "fore_aft", "fore_aft_ref", "knee_left", "knee_right",
     "knee_mean", "hip_angle", "angles_3d", "separation", "separation_pelvis", "separation_ref",
-    "counter", "wrist_drop_left", "wrist_drop_right", "world_rejected",
+    "counter", "wrist_drop_left", "wrist_drop_right", "world_rejected", "thigh_shin_2d",
 ]
 
 
@@ -362,3 +378,18 @@ def compute_series(seq: PoseSequence, view: Optional[str] = None) -> MetricSerie
     if len(fac) and ms.view != "side":
         ms.facing = "away from camera" if np.median(fac) > 0 else "toward camera"
     return ms
+
+
+def seated_reason(ms: "MetricSeries") -> Optional[str]:
+    """Why this video is not skiing (the person looks seated and facing the camera), or None."""
+    if not ms.is_video or ms.view not in ("frontal", "oblique"):
+        return None
+    r = ms.values["thigh_shin_2d"][ms.valid("thigh_shin_2d")]
+    if len(r) < SEATED_MIN_FRAMES:
+        return None
+    med = float(np.median(r))
+    if med >= SEATED_THIGH_SHIN:
+        return None
+    return (f"The person appears to be seated, not skiing (e.g. on a chairlift): seen from the front the thighs look "
+            f"{med:.2f}x the shin length, below the {SEATED_THIGH_SHIN:.2f} a standing skier never goes under. "
+            "No skiing items were measured. Trim the clip to the skiing part.")

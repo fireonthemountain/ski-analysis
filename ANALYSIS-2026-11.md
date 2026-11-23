@@ -578,3 +578,33 @@ No usable shots in L1 wedge turn, L1 medium-radius parallel or L2 funnel (distan
   warning.
 - MediaPipe's native library tries to upload usage telemetry to Google ("clearcut" log lines during runs); logged as
   `ski-analysis-9`.
+
+## 12. Pipeline fixes from the Level 1–3 run (November 22, 2026; ledger `ski-analysis-10`)
+
+Branch `fix/2026-11-shot-sanity`. Tests: 131 passed (9 new).
+
+**Not skiing (seated) check.** Hip and knee angles did not separate chairlift shots from skiing: seated riders read
+119–126° at the hip, inside the skiing range (103–135°), because in a front view the thigh points along the poorly
+estimated depth axis. The 2D thigh/shin image-length ratio did: across 46 shots, all 7 chairlift shots (L3 shots 05,
+08, 10, 13, 18, 20, 23; confirmed visually) measured 0.51–0.57, and every skiing shot 0.67–1.12 (deep L3 dynamic turns
+0.67–0.74, wedge 0.78–0.80). The rule is median below 0.62, 10+ frames, front or angled video only
+(`metrics.seated_reason`). When it fires, every item is inconclusive with the reason, and the run warns.
+
+**One person per video.** Each detected frame gets a hue/saturation histogram of the torso box. A Bhattacharyya
+distance above 0.45 to the current person's reference, sustained for 2 frames, starts a new identity; a return to
+someone seen before reuses their id. The longest identity is kept (`identity.keep_main_identity`). On real shots:
+- single-skier shots: no switches (handheld funnel clip, A2, a two-skier formation shot, pivot slips); one-frame
+  colour glitches up to 0.98 are absorbed by the 2-frame confirmation;
+- chairlift shots 18 and 23: switches found;
+- merged multi-shot sections: L1 parallel (100 s) 10 switches, longest track kept; L3 dynamic shot 04 split into 3 people.
+- A false switch appeared on A2 while torsos under 30 px still got signatures (distant skier: the box is mostly
+  snow). Torsos smaller than 30 px now get no signature and follow the neighbouring track; A2 is clean again.
+- Limit: people in identical uniforms (the Nordica instructors' red/blue) can't be told apart by colour. The skier
+  picker (`ski-analysis-6`) is the real fix for multi-person footage.
+
+**`validate_shots.sh`** now lists "shots" over 40 s in `summary.md` as probably several camera shots (flat light
+hides cuts from ffmpeg's scene filter). The identity check keeps the analysis on one person inside such shots.
+
+**Verified through the CLI:** chairlift shots 10 and 23 come back "seated, not skiing" with 12/12 inconclusive; the
+lowest-ratio real skier (L3 shot 21, 0.67) and A2 are unaffected (A2: 5 agree, 2 disagree, as before); the merged L1
+shot warns about 10 person switches and analyses the longest track.

@@ -12,8 +12,9 @@ import numpy as np
 
 from . import ingest, report
 from .assessment import Assessment
+from .identity import IdentityInfo, keep_main_identity
 from .keypoints import PoseFrame, PoseSequence
-from .metrics import MetricSeries, compute_series
+from .metrics import MetricSeries, compute_series, seated_reason
 from .pose import PoseEstimator, get_estimator
 from .segmentation import segment_turns
 from .smoothing import smooth_sequence
@@ -51,7 +52,7 @@ def analyze_sequence(seq: PoseSequence, assessment: Assessment) -> tuple[PoseSeq
         fac = ms.values["facing"][np.isfinite(ms.values["facing"])]
         facing_sign = float(np.sign(np.median(fac))) if len(fac) else None
         turns, incl_s = segment_turns(ms.t, ms.values["inclination"], ms.valid("inclination"), ms.fps, facing_sign)
-    return seq_s, ms, Context(ms=ms, turns=turns, incl_smooth=incl_s), stats
+    return seq_s, ms, Context(ms=ms, turns=turns, incl_smooth=incl_s, not_skiing=seated_reason(ms)), stats
 
 
 def run_validation(assessment: Assessment, media_paths: list[str], out_dir: str,
@@ -77,6 +78,7 @@ def run_validation(assessment: Assessment, media_paths: list[str], out_dir: str,
     est = estimator or get_estimator()
     est.reset()
     frames: list[PoseFrame] = []
+    identity = IdentityInfo()          # stills: one person per image, nothing to track
     raw_paths: list[str] = []
     names = display_names if display_names and len(display_names) == len(media_paths) else [os.path.basename(p) for p in media_paths]
     media_info: dict = {"kind": "video" if is_video else "images", "files": names}
@@ -97,6 +99,7 @@ def run_validation(assessment: Assessment, media_paths: list[str], out_dir: str,
                 if k % 10 == 0:
                     progress(0.05 + 0.75 * min(1.0, k / expected), f"Pose estimation: frame {k + 1} of ~{expected}")
             seq = PoseSequence(frames=frames, fps=fps, is_video=True, estimator=est.name)
+            seq, identity = keep_main_identity(seq)
         else:
             for k, path in enumerate(media_paths):
                 img = ingest.load_image(path)
@@ -165,6 +168,12 @@ def run_validation(assessment: Assessment, media_paths: list[str], out_dir: str,
         warnings.append(f"A skier was found in only {int(detected.sum())} of {len(frames)} frames. Zoom/crop the media so the skier fills more of the frame.")
     elif confident.mean() < 0.6:
         warnings.append(f"Only {int(confident.sum())} of {len(frames)} frames have a confident pose; verdicts rest on those frames alone.")
+    if ctx.not_skiing:
+        warnings.append(ctx.not_skiing)
+    if identity.switches:
+        warnings.append(f"The tracked person changed {identity.switches} time(s) - several people were close together. "
+                        f"Only the longest track was analysed ({identity.kept_t[0]:.1f}-{identity.kept_t[1]:.1f} s, {identity.kept_frames} frames); "
+                        f"{identity.dropped_frames} frames of someone else were left out. Trim or crop the clip to one skier.")
     rejected_3d = int(np.sum(np.isfinite(ms.values["world_rejected"])))
     if detected.sum() and rejected_3d / detected.sum() >= 0.10:
         warnings.append(f"The 3D pose looked collapsed in {rejected_3d} of {int(detected.sum())} detected frames (usually a skier "
@@ -193,7 +202,7 @@ def run_validation(assessment: Assessment, media_paths: list[str], out_dir: str,
         "media": media_info,
         "pose": {
             "estimator": est.name, "frames": len(frames), "frames_detected": int(detected.sum()),
-            "frames_confident": int(confident.sum()), "frames_3d_rejected": rejected_3d,
+            "frames_confident": int(confident.sum()), "frames_3d_rejected": rejected_3d, "identity_switches": identity.switches,
             "mean_confidence": round(float(ms.pose_conf[detected].mean()), 3) if detected.any() else 0.0,
             "has_3d": seq.has_world, "smoothing": smooth_stats,
         },

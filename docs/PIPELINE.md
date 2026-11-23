@@ -76,6 +76,15 @@ swapped between upper and lower body) is dropped too. `result.json` reports `pos
 warns when that is ≥ 10 % of detected frames. Evidence frames show the frame nearest the reported value (and the
 5th/95th percentile frames for range ends), not the extreme frame, which is usually a bad pose.
 
+One skier per video: each detected frame carries a colour signature of the torso (jacket). When it changes abruptly
+and stays changed (2+ frames; torsos under 30 px get no signature), the tracker has hopped to someone else; the
+longest track is kept, the other frames are dropped, and the run says so (`pose.identity_switches`). People in
+identical clothing can't be told apart this way.
+
+Not skiing: if, in a front or angled video, the hip-knee image length is under 0.62x the knee-ankle length (median,
+10+ frames), the person is seated facing the camera (e.g. a chairlift). Every item is then inconclusive with that
+reason instead of producing verdicts from a seated body.
+
 ## Thresholds (defaults — tune in `backend/pipeline/assessment.py`)
 
 PSIA describes the fundamentals qualitatively; **these cut-offs are this tool's engineering defaults,

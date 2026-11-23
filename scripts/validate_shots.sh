@@ -86,6 +86,19 @@ for tag, r in runs:
         m = (x or {}).get("measured") or {}
         row.append("-" if not x else f"{fmt(m.get('value'))} ({x['verdict'][:4]})")
     lines.append("| " + " | ".join(row) + " |")
+def secs(t):
+    m, s = t.split(":")
+    return int(m) * 60 + float(s)
+long = []
+for tag, span in where.items():
+    a_, b_ = span.split("-")
+    if secs(b_) - secs(a_) > 40:
+        long.append(f"{tag} ({secs(b_) - secs(a_):.0f} s)")
+if long:
+    lines.append("")
+    lines.append("Shots longer than 40 s probably contain several camera shots that the cut detector missed "
+                 "(flat light hides cuts): " + ", ".join(long) + ". Check their annotated.mp4; the pipeline keeps only the "
+                 "longest-tracked person in each, and says so in its warnings.")
 text = "\n".join(lines)
 print(text)
 with open(os.path.join(out, "summary.md"), "w") as fh:

@@ -22,6 +22,7 @@ import numpy as np
 
 from . import keypoints as K
 from .keypoints import PoseFrame
+from .identity import torso_signature
 
 MODEL_DIR = os.environ.get("POSE_MODEL_DIR", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models"))
 MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_{v}/float16/latest/pose_landmarker_{v}.task"
@@ -134,6 +135,8 @@ class MediaPipePoseEstimator:
 
         xy, vis, world = max(cands, key=score)
         frame.detected, frame.xy, frame.vis, frame.world = True, xy, vis, world
+        if track:
+            frame.appearance = torso_signature(image_bgr, xy, vis)
         if track:
             self._box, self._lost = self._bbox(xy, vis), 0
         return frame
